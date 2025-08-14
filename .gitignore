@@ -1,0 +1,56 @@
+# Virtual Environment
+.venv/                    # Python virtual environment with all installed packages
+
+# Python Cache and Compiled Files
+__pycache__/             # Python bytecode cache directories
+*.pyc                    # Compiled Python files
+*.pyo                    # Optimized Python files
+*.pyd                    # Python dynamic modules
+.pytest_cache/           # pytest cache directory
+
+# Distribution / Packaging
+dist/                    # Built distribution packages
+build/                   # Build output directory
+*.egg-info/              # Package metadata
+*.egg                    # Built egg packages
+
+# IDE and Editor Files
+.vscode/                 # Visual Studio Code settings
+.idea/                   # PyCharm/IntelliJ settings
+*.swp                    # Vim swap files
+*.swo                    # Vim backup files
+*~                       # Backup files
+
+# OS Generated Files
+.DS_Store                # macOS system files
+Thumbs.db                # Windows thumbnail cache
+desktop.ini              # Windows folder customization
+.fseventsd               # macOS file system events
+
+# Logs and Temporary Files
+*.log                    # Log files
+*.tmp                    # Temporary files
+*.temp                   # Temporary files
+logs/                    # Log directory
+
+# Data and Output Files
+data/                    # Experiment data directory
+output/                  # Generated output files
+results/                 # Experiment results
+*.csv                    # CSV data exports
+*.json                   # JSON data exports
+*.png                    # Generated images/charts
+*.jpg                    # Generated images/charts
+
+# Environment Variables
+.env                     # Environment variables (API keys, etc.)
+.env.local               # Local environment overrides
+
+# Testing
+.coverage                # Coverage reports
+htmlcov/                 # HTML coverage reports
+.tox/                    # Tox testing environments
+
+# Documentation Build
+docs/_build/             # Sphinx documentation build
+site/                    # MkDocs build output
