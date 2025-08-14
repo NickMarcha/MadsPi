@@ -1,56 +1,93 @@
 # Virtual Environment
-.venv/                    # Python virtual environment with all installed packages
+# Python virtual environment with all installed packages
+.venv/
 
 # Python Cache and Compiled Files
-__pycache__/             # Python bytecode cache directories
-*.pyc                    # Compiled Python files
-*.pyo                    # Optimized Python files
-*.pyd                    # Python dynamic modules
-.pytest_cache/           # pytest cache directory
+# Python bytecode cache directories
+__pycache__/
+# Compiled Python files
+*.pyc
+# Optimized Python files
+*.pyo
+# Python dynamic modules
+*.pyd
+# pytest cache directory
+.pytest_cache/
 
 # Distribution / Packaging
-dist/                    # Built distribution packages
-build/                   # Build output directory
-*.egg-info/              # Package metadata
-*.egg                    # Built egg packages
+# Built distribution packages
+dist/
+# Build output directory
+build/
+# Package metadata
+*.egg-info/
+# Built egg packages
+*.egg
 
 # IDE and Editor Files
-.vscode/                 # Visual Studio Code settings
-.idea/                   # PyCharm/IntelliJ settings
-*.swp                    # Vim swap files
-*.swo                    # Vim backup files
-*~                       # Backup files
+# Visual Studio Code settings
+.vscode/
+# PyCharm/IntelliJ settings
+.idea/
+# Vim swap files
+*.swp
+# Vim backup files
+*.swo
+# Backup files
+*~
 
 # OS Generated Files
-.DS_Store                # macOS system files
-Thumbs.db                # Windows thumbnail cache
-desktop.ini              # Windows folder customization
-.fseventsd               # macOS file system events
+# macOS system files
+.DS_Store
+# Windows thumbnail cache
+Thumbs.db
+# Windows folder customization
+desktop.ini
+# macOS file system events
+.fseventsd
 
 # Logs and Temporary Files
-*.log                    # Log files
-*.tmp                    # Temporary files
-*.temp                   # Temporary files
-logs/                    # Log directory
+# Log files
+*.log
+# Temporary files
+*.tmp
+# Temporary files
+*.temp
+# Log directory
+logs/
 
 # Data and Output Files
-data/                    # Experiment data directory
-output/                  # Generated output files
-results/                 # Experiment results
-*.csv                    # CSV data exports
-*.json                   # JSON data exports
-*.png                    # Generated images/charts
-*.jpg                    # Generated images/charts
+# Experiment data directory
+data/
+# Generated output files
+output/
+# Experiment results
+results/
+# CSV data exports
+*.csv
+# JSON data exports
+*.json
+# Generated images/charts
+*.png
+# Generated images/charts
+*.jpg
 
 # Environment Variables
-.env                     # Environment variables (API keys, etc.)
-.env.local               # Local environment overrides
+# Environment variables (API keys, etc.)
+.env
+# Local environment overrides
+.env.local
 
 # Testing
-.coverage                # Coverage reports
-htmlcov/                 # HTML coverage reports
-.tox/                    # Tox testing environments
+# Coverage reports
+.coverage
+# HTML coverage reports
+htmlcov/
+# Tox testing environments
+.tox/
 
 # Documentation Build
-docs/_build/             # Sphinx documentation build
-site/                    # MkDocs build output
+# Sphinx documentation build
+docs/_build/
+# MkDocs build output
+site/
