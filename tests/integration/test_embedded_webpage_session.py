@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from madspipeline.models import Project, ProjectType, EmbeddedWebpageConfig
@@ -20,7 +20,7 @@ try:
     # Test embedded webpage project creation
     config = EmbeddedWebpageConfig(
         webpage_url="https://www.example.com",  # Test with external URL
-        local_html_path=Path.cwd() / "test_webpage.html",  # Test with local file
+        local_html_path=Path(__file__).parent.parent / "fixtures" / "test_webpage.html",  # Test with local file
         enable_marker_api=True,
         fullscreen=True,
         allow_external_links=False
