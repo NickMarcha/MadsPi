@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg width="64px" height="64px" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <g>
+    <!-- Browser window -->
+    <rect x="2" y="2" width="60" height="60" rx="4" fill="#f0f0f0" stroke="#333" stroke-width="2"/>
+    
+    <!-- Browser header -->
+    <rect x="2" y="2" width="60" height="12" rx="4" fill="#e0e0e0"/>
+    
+    <!-- Browser buttons -->
+    <circle cx="8" cy="8" r="2" fill="#ff5f56"/>
+    <circle cx="16" cy="8" r="2" fill="#ffbd2e"/>
+    <circle cx="24" cy="8" r="2" fill="#27ca3f"/>
+    
+    <!-- Webpage content -->
+    <rect x="6" y="18" width="52" height="40" fill="#ffffff" stroke="#ddd" stroke-width="1"/>
+    
+    <!-- Webpage elements -->
+    <rect x="10" y="22" width="20" height="4" fill="#4a90e2"/>
+    <rect x="10" y="28" width="44" height="2" fill="#e0e0e0"/>
+    <rect x="10" y="32" width="44" height="2" fill="#e0e0e0"/>
+    <rect x="10" y="36" width="30" height="2" fill="#e0e0e0"/>
+    <rect x="10" y="40" width="44" height="2" fill="#e0e0e0"/>
+    <rect x="10" y="44" width="35" height="2" fill="#e0e0e0"/>
+    
+    <!-- Globe icon -->
+    <circle cx="48" cy="20" r="8" fill="none" stroke="#4a90e2" stroke-width="2"/>
+    <path d="M44 20c0-2.2 1.8-4 4-4s4 1.8 4 4-1.8 4-4 4" fill="none" stroke="#4a90e2" stroke-width="2"/>
+    <path d="M44 20c0 2.2 1.8 4 4 4s4-1.8 4-4" fill="none" stroke="#4a90e2" stroke-width="2"/>
+  </g>
+</svg>
+

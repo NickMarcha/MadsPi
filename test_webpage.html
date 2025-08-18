@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Webpage for MadsPipeline</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+
+    .header {
+      background-color: #4a90e2;
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .content {
+      background-color: #f9f9f9;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .interactive {
+      background-color: #e8f5e8;
+      padding: 20px;
+      border-radius: 8px;
+      border: 2px solid #4caf50;
+    }
+
+    button {
+      background-color: #4caf50;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 5px;
+    }
+
+    button:hover {
+      background-color: #45a049;
+    }
+
+    .click-area {
+      background-color: #ffeb3b;
+      padding: 20px;
+      margin: 10px 0;
+      border-radius: 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+
+    .click-area:hover {
+      background-color: #fdd835;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <h1>🧪 Test Webpage for MadsPipeline</h1>
+    <p>This is a test webpage to verify embedded webpage session functionality</p>
+  </div>
+
+  <div class="content">
+    <h2>About This Test</h2>
+    <p>This webpage is designed to test the embedded webpage session functionality in MadsPipeline. It includes various
+      interactive elements to test mouse tracking and event recording.</p>
+
+    <h3>Features to Test:</h3>
+    <ul>
+      <li>Mouse movement tracking</li>
+      <li>Click event recording</li>
+      <li>Interactive elements</li>
+      <li>Session data collection</li>
+    </ul>
+  </div>
+
+  <div class="interactive">
+    <h2>Interactive Elements</h2>
+    <p>Click the buttons below and move your mouse around to test tracking:</p>
+
+    <button onclick="alert('Button 1 clicked!')">Test Button 1</button>
+    <button onclick="alert('Button 2 clicked!')">Test Button 2</button>
+    <button onclick="alert('Button 3 clicked!')">Test Button 3</button>
+
+    <div class="click-area"
+      onclick="this.style.backgroundColor='#ff9800'; setTimeout(() => this.style.backgroundColor='#ffeb3b', 500)">
+      <h3>Clickable Area</h3>
+      <p>Click here to change color temporarily</p>
+    </div>
+  </div>
+
+  <div class="content">
+    <h2>Session Information</h2>
+    <p>This session will record:</p>
+    <ul>
+      <li>Mouse position every 100ms</li>
+      <li>All mouse click events</li>
+      <li>Mouse movement events</li>
+      <li>Session duration</li>
+    </ul>
+
+    <p><strong>Note:</strong> Close this window or click "End Session" to complete the session and save the data.</p>
+  </div>
+
+  <script>
+    // Add some interactive JavaScript
+    document.addEventListener('DOMContentLoaded', function () {
+      console.log('Test webpage loaded successfully');
+
+      // Add mouse move logging
+      document.addEventListener('mousemove', function (e) {
+        // This will be tracked by the MadsPipeline session
+        console.log('Mouse moved to:', e.clientX, e.clientY);
+      });
+
+      // Add click logging
+      document.addEventListener('click', function (e) {
+        console.log('Clicked at:', e.clientX, e.clientY);
+      });
+    });
+  </script>
+</body>
+
+</html>
