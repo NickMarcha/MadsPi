@@ -20,6 +20,8 @@ Some design requirements:
 
 Optionally instead of a sequence of images it would be better for it to work with videos or webpages as well, although screen recording may present a problem across platforms
 
+[MadsBridge details](/docs/MadsBridge.MD)
+
 ## Development
 
 ### Get running quick
