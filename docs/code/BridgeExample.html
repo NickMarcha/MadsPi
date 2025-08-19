@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>PySide6 IPC Demo</title>
+  <!-- Qt-provided JS -->
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <!-- Our reusable bridge -->
+  <script src="madsBridge.js"></script>
+</head>
+
+<body>
+  <h2>JS ↔ Python Messaging</h2>
+  <input id="input" type="text" value="Hello from JS" />
+  <button id="sendBtn">Send to Python</button>
+  <pre id="log"></pre>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      setupBridge(function (msg) {
+        document.getElementById("log").innerText += "\n" + msg;
+      });
+
+      document.getElementById("sendBtn").onclick = function () {
+        let txt = document.getElementById("input").value;
+        sendToPython(txt);
+      };
+    });
+  </script>
+</body>
+
+</html>
