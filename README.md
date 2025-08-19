@@ -1,5 +1,7 @@
 # Project in Informatics: Metrics of Attention Data Streaming and Visualization Pipeline
 
+![MadsPi](docs/images/MadsPi.png)
+
 ## Project Goals
 
 Open-source pipeline for collecting data on eyetracking, heart rate, and electrodermal activity when a reader is viewing or interacting with a visual data story. Should support both EmotiBit and Tobii Pro Spark through Lab Streaming Layer (LSL)

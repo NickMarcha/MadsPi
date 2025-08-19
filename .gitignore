@@ -63,14 +63,7 @@ data/
 output/
 # Experiment results
 results/
-# CSV data exports
-*.csv
-# JSON data exports
-*.json
-# Generated images/charts
-*.png
-# Generated images/charts
-*.jpg
+
 
 # Environment Variables
 # Environment variables (API keys, etc.)
