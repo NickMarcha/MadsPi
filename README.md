@@ -35,6 +35,12 @@ scripts\setup_windows.ps1
 .\.venv\Scripts\activate
 python src/madspipeline/main.py
 ```
+If you have issues running the script, do this first
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+scripts\setup_windows.ps1
+```
 
 #### Linux
 
