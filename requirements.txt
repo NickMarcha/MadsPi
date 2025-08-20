@@ -1,5 +1,4 @@
 pyside6>=6.8
-pyside6-webengine>=6.8
 matplotlib
 pandas
 plotly
