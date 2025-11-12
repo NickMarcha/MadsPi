@@ -5,6 +5,14 @@ import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+
+# Try to import cv2 for video playback (optional dependency)
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    cv2 = None
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QListWidget, QListWidgetItem,
@@ -2156,25 +2164,25 @@ class SessionReviewWindow(QMainWindow):
                 video_file = tracking_dir / "screen_recording.mp4"
             
             if video_file.exists():
-                try:
-                    import cv2
-                    self.video_path = video_file
-                    self.video_cap = cv2.VideoCapture(str(video_file))
-                    if self.video_cap.isOpened():
-                        self.video_fps = self.video_cap.get(cv2.CAP_PROP_FPS) or 30.0
-                        self.video_frame_count = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                        print(f"[SessionReview] Loaded video: {video_file} ({self.video_frame_count} frames, {self.video_fps} FPS)")
-                    else:
-                        print(f"[SessionReview] Could not open video file: {video_file}")
-                        self.video_cap = None
-                except ImportError:
+                if not CV2_AVAILABLE:
                     print(f"[SessionReview] opencv-python not available, cannot load video")
                     self.video_cap = None
-                except Exception as e:
-                    print(f"[SessionReview] Error loading video: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    self.video_cap = None
+                else:
+                    try:
+                        self.video_path = video_file
+                        self.video_cap = cv2.VideoCapture(str(video_file))
+                        if self.video_cap.isOpened():
+                            self.video_fps = self.video_cap.get(cv2.CAP_PROP_FPS) or 30.0
+                            self.video_frame_count = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                            print(f"[SessionReview] Loaded video: {video_file} ({self.video_frame_count} frames, {self.video_fps} FPS)")
+                        else:
+                            print(f"[SessionReview] Could not open video file: {video_file}")
+                            self.video_cap = None
+                    except Exception as e:
+                        print(f"[SessionReview] Error loading video: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        self.video_cap = None
             else:
                 print(f"[SessionReview] Video file not found: {video_file}")
         else:
@@ -2537,30 +2545,34 @@ class SessionReviewWindow(QMainWindow):
     def _update_overlay(self):
         """Update mouse tracking overlay on video."""
         # Update video frame if available
-        if self.video_cap and self.video_cap.isOpened():
-            # Calculate frame number from current time
-            frame_number = int(self.current_time * self.video_fps)
-            frame_number = max(0, min(frame_number, self.video_frame_count - 1))
-            
-            # Seek to frame
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-            ret, frame = self.video_cap.read()
-            
-            if ret:
-                # Convert BGR to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w, ch = frame_rgb.shape
-                bytes_per_line = ch * w
+        if CV2_AVAILABLE and self.video_cap and self.video_cap.isOpened():
+            try:
+                # Calculate frame number from current time
+                frame_number = int(self.current_time * self.video_fps)
+                frame_number = max(0, min(frame_number, self.video_frame_count - 1))
                 
-                # Create QPixmap from frame
-                from PySide6.QtGui import QImage
-                q_image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-                pixmap = QPixmap.fromImage(q_image)
+                # Seek to frame
+                self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+                ret, frame = self.video_cap.read()
                 
-                # Clear scene and add video frame
-                self.video_scene.clear()
-                self.video_scene.addPixmap(pixmap)
-                self.video_scene.setSceneRect(0, 0, w, h)
+                if ret:
+                    # Convert BGR to RGB
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    h, w, ch = frame_rgb.shape
+                    bytes_per_line = ch * w
+                    
+                    # Create QPixmap from frame
+                    from PySide6.QtGui import QImage
+                    q_image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                    pixmap = QPixmap.fromImage(q_image)
+                    
+                    # Clear scene and add video frame
+                    self.video_scene.clear()
+                    self.video_scene.addPixmap(pixmap)
+                    self.video_scene.setSceneRect(0, 0, w, h)
+            except Exception as e:
+                # Silently handle errors (video might be unavailable)
+                pass
         
         # Remove existing overlay items (mouse cursor and trail) - keep video frame
         overlay_items = []
