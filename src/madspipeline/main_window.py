@@ -2303,8 +2303,24 @@ class SessionReviewWindow(QMainWindow):
             
             # Channel and value
             data = sample.get('data', [])
-            if isinstance(data, list) and len(data) > 0:
-                # Show first channel value
+            stream_name = sample.get('stream_name', '')
+            
+            if stream_name == 'MadsPipeline_MouseTracking':
+                # Mouse tracking data: [x, y, event_type]
+                if isinstance(data, list) and len(data) >= 2:
+                    x = data[0] if len(data) > 0 else 0
+                    y = data[1] if len(data) > 1 else 0
+                    event_type_val = data[2] if len(data) > 2 else 0
+                    # Decode event type
+                    event_type_map = {0.0: 'position', 1.0: 'press', 2.0: 'release', 3.0: 'move'}
+                    event_type_str = event_type_map.get(event_type_val, f'unknown({event_type_val})')
+                    self.lsl_table.setItem(i, 2, QTableWidgetItem("Mouse"))
+                    self.lsl_table.setItem(i, 3, QTableWidgetItem(f"({x:.0f}, {y:.0f}) - {event_type_str}"))
+                else:
+                    self.lsl_table.setItem(i, 2, QTableWidgetItem("Mouse"))
+                    self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data)[:50]))
+            elif isinstance(data, list) and len(data) > 0:
+                # Show first channel value for other streams
                 self.lsl_table.setItem(i, 2, QTableWidgetItem("Ch 0"))
                 self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data[0])[:50]))
             elif isinstance(data, dict):
