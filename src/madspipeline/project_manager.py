@@ -55,7 +55,7 @@ class ProjectManager:
         # Create project directory structure
         project_path.mkdir(parents=True, exist_ok=True)
         (project_path / "sessions").mkdir(exist_ok=True)
-        (project_path / "recordings").mkdir(exist_ok=True)
+        # Note: recordings folder removed - recordings are now stored in tracking_data/{session_id}/
         (project_path / "tracking_data").mkdir(exist_ok=True)
         (project_path / "exports").mkdir(exist_ok=True)
         

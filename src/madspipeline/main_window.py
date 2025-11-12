@@ -53,9 +53,10 @@ import json
 
 # Import local modules using absolute imports for direct execution
 from .project_manager import ProjectManager
-from .models import Project, Session, ProjectType
+from .models import Project, Session, ProjectType, ScreenRecordingConfig
 from .madsBridge import Bridge
 from .lsl_integration import LSLBridgeStreamer, LSLMouseTrackingStreamer, LSLRecorder, LSL_AVAILABLE
+from .screen_recorder import ScreenRecorder, RECORDING_AVAILABLE
 
 
 class ProjectCreationDialog(QDialog):
@@ -1275,6 +1276,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.lsl_recorder: Optional[LSLRecorder] = None
         self.lsl_timer: Optional[QTimer] = None
         
+        # Screen recording component
+        self.screen_recorder: Optional[ScreenRecorder] = None
+        
         # Flag to prevent double execution of _end_session
         self._session_ending = False
         
@@ -1304,6 +1308,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         # Set up tracking
         self._setup_tracking()
+        
+        # Set up screen recording
+        self._setup_screen_recording()
     
     def _setup_ui(self):
         """Set up the session window UI."""
@@ -1538,6 +1545,45 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.web_view.mouseReleaseEvent = self._on_mouse_release
         self.web_view.mouseMoveEvent = self._on_mouse_move
     
+    def _setup_screen_recording(self):
+        """Set up screen recording."""
+        if not RECORDING_AVAILABLE:
+            print("Warning: Screen recording not available (mss/opencv not installed)")
+            return
+        
+        # Use default config if project doesn't have screen recording config
+        # (for embedded webpage sessions, we still want to record the screen)
+        if self.project.screen_recording_config:
+            config = self.project.screen_recording_config
+        else:
+            # Default config for embedded webpage sessions
+            config = ScreenRecordingConfig(
+                recording_quality="high",
+                fps=30,
+                resolution=None,  # Fullscreen
+                include_audio=False,
+                mouse_tracking=True
+            )
+        
+        # Create output directory
+        tracking_dir = self.project.project_path / "tracking_data" / self.session.session_id
+        
+        try:
+            # Create screen recorder - pass self (the window) to record only this window
+            self.screen_recorder = ScreenRecorder(
+                session_id=self.session.session_id,
+                config=config,
+                output_dir=tracking_dir,
+                window=self  # Record only this window
+            )
+            
+            # Start recording
+            self.screen_recorder.start_recording()
+            self.statusBar().showMessage("Screen recording started", 2000)
+        except Exception as e:
+            print(f"Warning: Could not start screen recording: {e}")
+            self.statusBar().showMessage(f"Screen recording unavailable: {e}", 2000)
+    
     def _collect_tracking_data(self):
         """Collect current tracking data."""
         cursor_pos = self.web_view.mapFromGlobal(self.web_view.cursor().pos())
@@ -1659,6 +1705,16 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         # Stop tracking
         if hasattr(self, 'tracking_timer'):
             self.tracking_timer.stop()
+        
+        # Stop screen recording
+        if self.screen_recorder:
+            try:
+                video_path = self.screen_recorder.stop_recording()
+                if video_path:
+                    print(f"Screen recording saved: {video_path}")
+            except Exception as e:
+                print(f"Error stopping screen recording: {e}")
+            self.screen_recorder = None
         
         # Stop LSL recording
         if self.lsl_timer:
@@ -1894,10 +1950,15 @@ class SessionSelectionDialog(QDialog):
         self.review_button.setDefault(True)
         self.review_button.setEnabled(False)
         
+        self.open_video_button = QPushButton("Open Video")
+        self.open_video_button.clicked.connect(self._on_open_video_clicked)
+        self.open_video_button.setEnabled(False)
+        
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.clicked.connect(self.reject)
         
         button_layout.addWidget(self.review_button)
+        button_layout.addWidget(self.open_video_button)
         button_layout.addWidget(self.cancel_button)
         
         layout.addLayout(button_layout)
@@ -1941,9 +2002,23 @@ class SessionSelectionDialog(QDialog):
                 f"Duration: {duration_str}"
             )
             self.review_button.setEnabled(True)
+            
+            # Check if video file exists
+            tracking_dir = None
+            if session.tracking_data_path:
+                tracking_dir = session.tracking_data_path
+            else:
+                tracking_dir = self.project.project_path / "tracking_data" / session.session_id
+            
+            video_file = tracking_dir / f"screen_recording_{session.session_id}.mp4"
+            if not video_file.exists():
+                video_file = tracking_dir / "screen_recording.mp4"
+            
+            self.open_video_button.setEnabled(video_file.exists() if tracking_dir and tracking_dir.exists() else False)
         else:
             self.info_label.setText("No session selected")
             self.review_button.setEnabled(False)
+            self.open_video_button.setEnabled(False)
     
     def _on_session_double_clicked(self, item):
         """Handle double-click on session."""
@@ -1955,6 +2030,44 @@ class SessionSelectionDialog(QDialog):
         if selected_items:
             self.selected_session = selected_items[0].data(Qt.ItemDataRole.UserRole)
             self.accept()
+    
+    def _on_open_video_clicked(self):
+        """Handle open video button click - opens video in external player."""
+        selected_items = self.session_list.selectedItems()
+        if not selected_items:
+            return
+        
+        session = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        
+        # Find video file
+        tracking_dir = None
+        if session.tracking_data_path:
+            tracking_dir = session.tracking_data_path
+        else:
+            tracking_dir = self.project.project_path / "tracking_data" / session.session_id
+        
+        video_file = tracking_dir / f"screen_recording_{session.session_id}.mp4"
+        if not video_file.exists():
+            video_file = tracking_dir / "screen_recording.mp4"
+        
+        if not video_file.exists():
+            QMessageBox.warning(self, "Video Not Found", f"Video file not found for session: {session.name}")
+            return
+        
+        # Open video in system default player
+        import subprocess
+        import platform
+        import os
+        
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(str(video_file))
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.run(['open', str(video_file)])
+            else:  # Linux
+                subprocess.run(['xdg-open', str(video_file)])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open video: {e}")
 
 
 class SessionReviewWindow(QMainWindow):
@@ -1970,6 +2083,12 @@ class SessionReviewWindow(QMainWindow):
         self.lsl_data: List[Dict[str, Any]] = []
         self.session_start_time: Optional[datetime] = None
         self.session_duration: float = 0.0
+        
+        # Video playback
+        self.video_path: Optional[Path] = None
+        self.video_cap = None  # OpenCV VideoCapture
+        self.video_fps: float = 30.0
+        self.video_frame_count: int = 0
         
         # Current playback time (in seconds from session start)
         self.current_time: float = 0.0
@@ -2029,6 +2148,35 @@ class SessionReviewWindow(QMainWindow):
                     traceback.print_exc()
             else:
                 print(f"[SessionReview] LSL file not found: {lsl_file}")
+            
+            # Load screen recording video
+            video_file = tracking_dir / f"screen_recording_{self.session.session_id}.mp4"
+            if not video_file.exists():
+                # Try alternative naming
+                video_file = tracking_dir / "screen_recording.mp4"
+            
+            if video_file.exists():
+                try:
+                    import cv2
+                    self.video_path = video_file
+                    self.video_cap = cv2.VideoCapture(str(video_file))
+                    if self.video_cap.isOpened():
+                        self.video_fps = self.video_cap.get(cv2.CAP_PROP_FPS) or 30.0
+                        self.video_frame_count = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                        print(f"[SessionReview] Loaded video: {video_file} ({self.video_frame_count} frames, {self.video_fps} FPS)")
+                    else:
+                        print(f"[SessionReview] Could not open video file: {video_file}")
+                        self.video_cap = None
+                except ImportError:
+                    print(f"[SessionReview] opencv-python not available, cannot load video")
+                    self.video_cap = None
+                except Exception as e:
+                    print(f"[SessionReview] Error loading video: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.video_cap = None
+            else:
+                print(f"[SessionReview] Video file not found: {video_file}")
         else:
             print(f"[SessionReview] Tracking directory does not exist: {tracking_dir}")
         
@@ -2112,13 +2260,14 @@ class SessionReviewWindow(QMainWindow):
         self.video_view.setMinimumSize(800, 600)
         self.video_view.setStyleSheet("background-color: #000;")
         
-        # Add placeholder text
-        placeholder_text = self.video_scene.addText(
-            "Video/Webpage Playback\n(Screen recording not yet implemented)",
-            QFont("Arial", 16)
-        )
-        placeholder_text.setDefaultTextColor(QColor(255, 255, 255))
-        placeholder_text.setPos(200, 250)
+        # Add placeholder text (will be removed if video loads)
+        if not self.video_cap:
+            placeholder_text = self.video_scene.addText(
+                "Video/Webpage Playback\n(Screen recording not available)",
+                QFont("Arial", 16)
+            )
+            placeholder_text.setDefaultTextColor(QColor(255, 255, 255))
+            placeholder_text.setPos(200, 250)
         
         video_layout.addWidget(self.video_view)
         
@@ -2387,12 +2536,40 @@ class SessionReviewWindow(QMainWindow):
     
     def _update_overlay(self):
         """Update mouse tracking overlay on video."""
-        # Clear existing overlay items (except placeholder text)
-        items_to_remove = []
+        # Update video frame if available
+        if self.video_cap and self.video_cap.isOpened():
+            # Calculate frame number from current time
+            frame_number = int(self.current_time * self.video_fps)
+            frame_number = max(0, min(frame_number, self.video_frame_count - 1))
+            
+            # Seek to frame
+            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+            ret, frame = self.video_cap.read()
+            
+            if ret:
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = frame_rgb.shape
+                bytes_per_line = ch * w
+                
+                # Create QPixmap from frame
+                from PySide6.QtGui import QImage
+                q_image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                pixmap = QPixmap.fromImage(q_image)
+                
+                # Clear scene and add video frame
+                self.video_scene.clear()
+                self.video_scene.addPixmap(pixmap)
+                self.video_scene.setSceneRect(0, 0, w, h)
+        
+        # Remove existing overlay items (mouse cursor and trail) - keep video frame
+        overlay_items = []
         for item in self.video_scene.items():
-            if not isinstance(item, QGraphicsTextItem) or item.toPlainText() != "Video/Webpage Playback\n(Screen recording not yet implemented)":
-                items_to_remove.append(item)
-        for item in items_to_remove:
+            # Remove only overlay graphics items (mouse cursor and trail)
+            if isinstance(item, (QGraphicsEllipseItem, QGraphicsLineItem)):
+                overlay_items.append(item)
+        
+        for item in overlay_items:
             self.video_scene.removeItem(item)
         
         # Find mouse position at current time
