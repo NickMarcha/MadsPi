@@ -11,10 +11,12 @@ from PySide6.QtWidgets import (
     QDialog, QLineEdit, QTextEdit, QFormLayout, QMessageBox,
     QStackedWidget, QFrame, QScrollArea, QGridLayout,
     QSplitter, QGroupBox, QFileDialog, QComboBox, QCheckBox,
-    QSpinBox, QDoubleSpinBox
+    QSpinBox, QDoubleSpinBox, QSlider, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QGraphicsView, QGraphicsScene,
+    QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QSize, QUrl
-from PySide6.QtGui import QFont, QIcon, QPixmap
+from PySide6.QtCore import Qt, Signal, QTimer, QSize, QUrl, QPointF, QRectF
+from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPen, QBrush, QPainter
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebChannel import QWebChannel
@@ -1696,11 +1698,21 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 json.dump(self.tracking_data, f, indent=2)
         
         # Save LSL recorded data if available (this is the comprehensive record with all streams)
-        if self.lsl_recorder and self.lsl_recorder.recorded_data:
-            lsl_file = tracking_dir / "lsl_recorded_data.json"
-            # Include all tracking data in LSL file for completeness
-            # (even though most should already be in LSL streams)
-            self.lsl_recorder.save_to_file(str(lsl_file), additional_tracking_data=self.tracking_data)
+        # Try to save even if there was an error, as long as we have some data
+        if self.lsl_recorder:
+            try:
+                if self.lsl_recorder.recorded_data:
+                    lsl_file = tracking_dir / "lsl_recorded_data.json"
+                    # Include all tracking data in LSL file for completeness
+                    # (even though most should already be in LSL streams)
+                    self.lsl_recorder.save_to_file(str(lsl_file), additional_tracking_data=self.tracking_data)
+                    print(f"Saved {len(self.lsl_recorder.recorded_data)} LSL samples to {lsl_file}")
+                else:
+                    print("Warning: LSL recorder has no recorded data to save")
+            except Exception as e:
+                print(f"Error saving LSL data: {e}")
+                import traceback
+                traceback.print_exc()
             
             # Also add LSL data summary to tracking data
             lsl_summary = {
@@ -1795,6 +1807,590 @@ class SessionCreationDialog(QDialog):
             return
         
         self.accept()
+
+
+class SessionSelectionDialog(QDialog):
+    """Dialog for selecting a session to review."""
+    
+    def __init__(self, project: Project, project_manager, parent=None):
+        super().__init__(parent)
+        self.project = project
+        self.project_manager = project_manager
+        self.selected_session: Optional[Session] = None
+        
+        self.setWindowTitle(f"Select Session - {project.name}")
+        self.setModal(True)
+        self.setMinimumSize(500, 400)
+        
+        self._setup_ui()
+        self._load_sessions()
+    
+    def _setup_ui(self):
+        """Set up the dialog UI."""
+        layout = QVBoxLayout()
+        
+        # Instructions
+        info_label = QLabel("Select a session to review:")
+        layout.addWidget(info_label)
+        
+        # Session list
+        self.session_list = QListWidget()
+        self.session_list.itemDoubleClicked.connect(self._on_session_double_clicked)
+        layout.addWidget(self.session_list)
+        
+        # Session info
+        self.info_label = QLabel("No session selected")
+        self.info_label.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+        layout.addWidget(self.info_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.review_button = QPushButton("Review Session")
+        self.review_button.clicked.connect(self._on_review_clicked)
+        self.review_button.setDefault(True)
+        self.review_button.setEnabled(False)
+        
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addWidget(self.review_button)
+        button_layout.addWidget(self.cancel_button)
+        
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+        
+        # Connect selection change
+        self.session_list.itemSelectionChanged.connect(self._on_selection_changed)
+    
+    def _load_sessions(self):
+        """Load all sessions for the project."""
+        self.session_list.clear()
+        self.sessions = []
+        
+        if not self.project.sessions:
+            self.info_label.setText("No sessions available for this project.")
+            return
+        
+        # Load each session
+        for session_id in self.project.sessions:
+            session = self.project_manager._load_session_metadata(self.project, session_id)
+            if session:
+                self.sessions.append(session)
+                # Create list item
+                item = QListWidgetItem()
+                item.setText(f"{session.name} ({session.created_date.strftime('%Y-%m-%d %H:%M:%S')})")
+                item.setData(Qt.ItemDataRole.UserRole, session)
+                self.session_list.addItem(item)
+        
+        if not self.sessions:
+            self.info_label.setText("No valid sessions found.")
+    
+    def _on_selection_changed(self):
+        """Handle session selection change."""
+        selected_items = self.session_list.selectedItems()
+        if selected_items:
+            session = selected_items[0].data(Qt.ItemDataRole.UserRole)
+            duration_str = f"{session.duration:.1f}s" if session.duration else "N/A"
+            self.info_label.setText(
+                f"Session: {session.name}\n"
+                f"Created: {session.created_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Duration: {duration_str}"
+            )
+            self.review_button.setEnabled(True)
+        else:
+            self.info_label.setText("No session selected")
+            self.review_button.setEnabled(False)
+    
+    def _on_session_double_clicked(self, item):
+        """Handle double-click on session."""
+        self._on_review_clicked()
+    
+    def _on_review_clicked(self):
+        """Handle review button click."""
+        selected_items = self.session_list.selectedItems()
+        if selected_items:
+            self.selected_session = selected_items[0].data(Qt.ItemDataRole.UserRole)
+            self.accept()
+
+
+class SessionReviewWindow(QMainWindow):
+    """Window for reviewing session data with video playback and overlays."""
+    
+    def __init__(self, project: Project, session: Session, project_manager, parent=None):
+        super().__init__(parent)
+        self.project = project
+        self.session = session
+        self.project_manager = project_manager
+        
+        self.tracking_data: List[Dict[str, Any]] = []
+        self.lsl_data: List[Dict[str, Any]] = []
+        self.session_start_time: Optional[datetime] = None
+        self.session_duration: float = 0.0
+        
+        # Current playback time (in seconds from session start)
+        self.current_time: float = 0.0
+        self.is_playing: bool = False
+        self.playback_timer: Optional[QTimer] = None
+        
+        self.setWindowTitle(f"Review Session: {session.name} - {project.name}")
+        self.setMinimumSize(1400, 900)
+        
+        self._load_session_data()
+        self._setup_ui()
+        self._setup_playback()
+    
+    def _load_session_data(self):
+        """Load tracking data and LSL data for the session."""
+        # Try to find tracking data directory
+        tracking_dir = None
+        
+        # First, try using session.tracking_data_path if set
+        if self.session.tracking_data_path:
+            tracking_dir = self.session.tracking_data_path
+        else:
+            # Fallback: construct path from project and session ID
+            tracking_dir = self.project.project_path / "tracking_data" / self.session.session_id
+        
+        print(f"[SessionReview] Looking for tracking data in: {tracking_dir}")
+        
+        # Load tracking_data.json
+        if tracking_dir and tracking_dir.exists():
+            tracking_file = tracking_dir / "tracking_data.json"
+            print(f"[SessionReview] Checking for tracking file: {tracking_file}")
+            if tracking_file.exists():
+                try:
+                    with open(tracking_file, 'r', encoding='utf-8') as f:
+                        self.tracking_data = json.load(f)
+                    print(f"[SessionReview] Loaded {len(self.tracking_data)} tracking events")
+                except Exception as e:
+                    print(f"[SessionReview] Error loading tracking data: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"[SessionReview] Tracking file not found: {tracking_file}")
+            
+            # Load lsl_recorded_data.json
+            lsl_file = tracking_dir / "lsl_recorded_data.json"
+            print(f"[SessionReview] Checking for LSL file: {lsl_file}")
+            if lsl_file.exists():
+                try:
+                    with open(lsl_file, 'r', encoding='utf-8') as f:
+                        lsl_data = json.load(f)
+                        # Extract recorded samples (structure: lsl_samples array)
+                        self.lsl_data = lsl_data.get('lsl_samples', [])
+                    print(f"[SessionReview] Loaded {len(self.lsl_data)} LSL samples")
+                except Exception as e:
+                    print(f"[SessionReview] Error loading LSL data: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"[SessionReview] LSL file not found: {lsl_file}")
+        else:
+            print(f"[SessionReview] Tracking directory does not exist: {tracking_dir}")
+        
+        # Calculate session start time and duration
+        if self.tracking_data:
+            try:
+                # Find first valid timestamp
+                first_timestamp = None
+                last_timestamp = None
+                for event in self.tracking_data:
+                    ts = event.get('timestamp')
+                    if ts and isinstance(ts, str):
+                        try:
+                            dt = datetime.fromisoformat(ts)
+                            if first_timestamp is None:
+                                first_timestamp = dt
+                            last_timestamp = dt
+                        except (ValueError, TypeError):
+                            continue
+                
+                if first_timestamp and last_timestamp:
+                    self.session_start_time = first_timestamp
+                    self.session_duration = (last_timestamp - first_timestamp).total_seconds()
+                    print(f"[SessionReview] Session duration: {self.session_duration:.2f}s")
+                else:
+                    print(f"[SessionReview] Could not find valid timestamps, using session.duration")
+                    if self.session.duration:
+                        self.session_duration = self.session.duration
+            except Exception as e:
+                print(f"[SessionReview] Error calculating duration: {e}")
+                import traceback
+                traceback.print_exc()
+                if self.session.duration:
+                    self.session_duration = self.session.duration
+        elif self.session.duration:
+            self.session_duration = self.session.duration
+        else:
+            self.session_duration = 0.0
+            print(f"[SessionReview] No tracking data and no session duration - setting to 0")
+    
+    def _setup_ui(self):
+        """Set up the review window UI."""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        
+        # Top bar with session info and controls
+        top_bar = QHBoxLayout()
+        
+        info_label = QLabel(f"Session: {self.session.name} | Duration: {self.session_duration:.1f}s")
+        info_label.setStyleSheet("font-weight: bold; padding: 5px;")
+        top_bar.addWidget(info_label)
+        
+        top_bar.addStretch()
+        
+        # Playback controls
+        self.play_button = QPushButton("▶ Play")
+        self.play_button.clicked.connect(self._toggle_playback)
+        top_bar.addWidget(self.play_button)
+        
+        self.time_label = QLabel("00:00 / 00:00")
+        top_bar.addWidget(self.time_label)
+        
+        # Speed control
+        speed_label = QLabel("Speed:")
+        top_bar.addWidget(speed_label)
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["0.25x", "0.5x", "1x", "1.5x", "2x", "4x"])
+        self.speed_combo.setCurrentText("1x")
+        top_bar.addWidget(self.speed_combo)
+        
+        main_layout.addLayout(top_bar)
+        
+        # Main splitter: Video/Overlay | Events/LSL Data
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Left side: Video player with overlay
+        video_widget = QWidget()
+        video_layout = QVBoxLayout(video_widget)
+        
+        # Video player area (placeholder for now - will show webpage or video when screen recording is implemented)
+        self.video_scene = QGraphicsScene()
+        self.video_view = QGraphicsView(self.video_scene)
+        self.video_view.setMinimumSize(800, 600)
+        self.video_view.setStyleSheet("background-color: #000;")
+        
+        # Add placeholder text
+        placeholder_text = self.video_scene.addText(
+            "Video/Webpage Playback\n(Screen recording not yet implemented)",
+            QFont("Arial", 16)
+        )
+        placeholder_text.setDefaultTextColor(QColor(255, 255, 255))
+        placeholder_text.setPos(200, 250)
+        
+        video_layout.addWidget(self.video_view)
+        
+        # Timeline scrubber
+        timeline_layout = QHBoxLayout()
+        timeline_layout.addWidget(QLabel("Timeline:"))
+        
+        self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
+        self.timeline_slider.setMinimum(0)
+        max_value = max(1, int(self.session_duration * 100))  # 100ms precision, at least 1
+        self.timeline_slider.setMaximum(max_value)
+        self.timeline_slider.valueChanged.connect(self._on_timeline_changed)
+        self.timeline_slider.sliderPressed.connect(lambda: setattr(self, '_seeking', True))
+        self.timeline_slider.sliderReleased.connect(lambda: setattr(self, '_seeking', False))
+        self._seeking = False
+        timeline_layout.addWidget(self.timeline_slider)
+        
+        video_layout.addLayout(timeline_layout)
+        
+        main_splitter.addWidget(video_widget)
+        
+        # Right side: Events and LSL data
+        right_splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # Events table
+        events_group = QGroupBox("Events Timeline")
+        events_layout = QVBoxLayout()
+        
+        self.events_table = QTableWidget()
+        self.events_table.setColumnCount(4)
+        self.events_table.setHorizontalHeaderLabels(["Time", "Type", "Event", "Details"])
+        self.events_table.horizontalHeader().setStretchLastSection(True)
+        self.events_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.events_table.itemSelectionChanged.connect(self._on_event_selected)
+        events_layout.addWidget(self.events_table)
+        
+        events_group.setLayout(events_layout)
+        right_splitter.addWidget(events_group)
+        
+        # LSL data visualization
+        lsl_group = QGroupBox("LSL Tracking Data")
+        lsl_layout = QVBoxLayout()
+        
+        self.lsl_table = QTableWidget()
+        self.lsl_table.setColumnCount(4)
+        self.lsl_table.setHorizontalHeaderLabels(["Time", "Stream", "Channel", "Value"])
+        self.lsl_table.horizontalHeader().setStretchLastSection(True)
+        lsl_layout.addWidget(self.lsl_table)
+        
+        lsl_group.setLayout(lsl_layout)
+        right_splitter.addWidget(lsl_group)
+        
+        right_splitter.setSizes([400, 300])
+        main_splitter.addWidget(right_splitter)
+        
+        main_splitter.setSizes([800, 400])
+        main_layout.addWidget(main_splitter)
+        
+        # Populate events table
+        self._populate_events_table()
+        
+        # Populate LSL table
+        self._populate_lsl_table()
+    
+    def _populate_events_table(self):
+        """Populate the events table with tracking data."""
+        print(f"[SessionReview] Populating events table with {len(self.tracking_data)} events")
+        self.events_table.setRowCount(len(self.tracking_data))
+        
+        if not self.tracking_data:
+            print("[SessionReview] No tracking data to display")
+            return
+        
+        for i, event in enumerate(self.tracking_data):
+            # Calculate relative time - handle different timestamp formats
+            timestamp = event.get('timestamp')
+            if not timestamp:
+                relative_time = 0.0
+            elif isinstance(timestamp, str):
+                try:
+                    event_time = datetime.fromisoformat(timestamp)
+                    if self.session_start_time:
+                        relative_time = (event_time - self.session_start_time).total_seconds()
+                    else:
+                        relative_time = 0.0
+                except (ValueError, TypeError) as e:
+                    print(f"[SessionReview] Error parsing timestamp '{timestamp}': {e}")
+                    relative_time = 0.0
+            else:
+                # Timestamp might be a datetime object or other type
+                print(f"[SessionReview] Unexpected timestamp type: {type(timestamp)}, value: {timestamp}")
+                relative_time = 0.0
+            
+            # Time column
+            time_str = f"{relative_time:.2f}s"
+            self.events_table.setItem(i, 0, QTableWidgetItem(time_str))
+            
+            # Event type
+            event_type = event.get('event_type', 'unknown')
+            self.events_table.setItem(i, 1, QTableWidgetItem(event_type))
+            
+            # Event details
+            if event_type == 'bridge_event':
+                bridge_type = event.get('bridge_event_type', 'unknown')
+                self.events_table.setItem(i, 2, QTableWidgetItem(f"Bridge: {bridge_type}"))
+                # Details
+                bridge_data = event.get('bridge_event_data', {})
+                details_str = str(bridge_data)[:100]  # Truncate long details
+                self.events_table.setItem(i, 3, QTableWidgetItem(details_str))
+            elif event_type in ['mouse_press', 'mouse_release', 'mouse_move']:
+                self.events_table.setItem(i, 2, QTableWidgetItem(event_type.replace('_', ' ').title()))
+                mouse_pos = event.get('mouse_position', [0, 0])
+                self.events_table.setItem(i, 3, QTableWidgetItem(f"Position: ({mouse_pos[0]}, {mouse_pos[1]})"))
+            else:
+                self.events_table.setItem(i, 2, QTableWidgetItem(event_type))
+                self.events_table.setItem(i, 3, QTableWidgetItem(str(event)[:100]))
+    
+    def _populate_lsl_table(self):
+        """Populate the LSL data table."""
+        print(f"[SessionReview] Populating LSL table with {len(self.lsl_data)} samples")
+        # Show first 100 samples (can be expanded later)
+        samples_to_show = min(100, len(self.lsl_data))
+        self.lsl_table.setRowCount(samples_to_show)
+        
+        if not self.lsl_data:
+            print("[SessionReview] No LSL data to display")
+            return
+        
+        for i, sample in enumerate(self.lsl_data[:samples_to_show]):
+            # Time
+            relative_time = sample.get('relative_time', 0.0)
+            self.lsl_table.setItem(i, 0, QTableWidgetItem(f"{relative_time:.3f}s"))
+            
+            # Stream name (from parsed structure)
+            stream_name = sample.get('stream_name', 'Unknown')
+            self.lsl_table.setItem(i, 1, QTableWidgetItem(stream_name))
+            
+            # Channel and value
+            data = sample.get('data', [])
+            if isinstance(data, list) and len(data) > 0:
+                # Show first channel value
+                self.lsl_table.setItem(i, 2, QTableWidgetItem("Ch 0"))
+                self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data[0])[:50]))
+            elif isinstance(data, dict):
+                # Bridge events might be stored as dict
+                self.lsl_table.setItem(i, 2, QTableWidgetItem("Event"))
+                self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data)[:50]))
+            else:
+                self.lsl_table.setItem(i, 2, QTableWidgetItem("N/A"))
+                self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data)[:50] if data else "N/A"))
+    
+    def _setup_playback(self):
+        """Set up playback timer and controls."""
+        self.playback_timer = QTimer()
+        self.playback_timer.timeout.connect(self._update_playback)
+        self.playback_timer.setInterval(100)  # Update every 100ms
+    
+    def _toggle_playback(self):
+        """Toggle playback state."""
+        if self.is_playing:
+            self.playback_timer.stop()
+            self.is_playing = False
+            self.play_button.setText("▶ Play")
+        else:
+            self.playback_timer.start()
+            self.is_playing = True
+            self.play_button.setText("⏸ Pause")
+    
+    def _update_playback(self):
+        """Update playback position."""
+        if not self._seeking:
+            # Get speed multiplier
+            speed_text = self.speed_combo.currentText()
+            speed = float(speed_text.replace('x', ''))
+            
+            # Update time
+            self.current_time += 0.1 * speed  # 100ms * speed
+            
+            if self.current_time >= self.session_duration:
+                self.current_time = self.session_duration
+                self._toggle_playback()  # Stop at end
+            
+            # Update timeline slider
+            self.timeline_slider.blockSignals(True)
+            self.timeline_slider.setValue(int(self.current_time * 100))
+            self.timeline_slider.blockSignals(False)
+        
+        # Update time label
+        current_str = f"{int(self.current_time // 60):02d}:{int(self.current_time % 60):02d}"
+        duration_str = f"{int(self.session_duration // 60):02d}:{int(self.session_duration % 60):02d}"
+        self.time_label.setText(f"{current_str} / {duration_str}")
+        
+        # Update overlay
+        self._update_overlay()
+    
+    def _on_timeline_changed(self, value):
+        """Handle timeline slider change."""
+        if not self._seeking:
+            self.current_time = value / 100.0
+            self._update_overlay()
+            # Update time label
+            current_str = f"{int(self.current_time // 60):02d}:{int(self.current_time % 60):02d}"
+            duration_str = f"{int(self.session_duration // 60):02d}:{int(self.session_duration % 60):02d}"
+            self.time_label.setText(f"{current_str} / {duration_str}")
+    
+    def _update_overlay(self):
+        """Update mouse tracking overlay on video."""
+        # Clear existing overlay items (except placeholder text)
+        items_to_remove = []
+        for item in self.video_scene.items():
+            if not isinstance(item, QGraphicsTextItem) or item.toPlainText() != "Video/Webpage Playback\n(Screen recording not yet implemented)":
+                items_to_remove.append(item)
+        for item in items_to_remove:
+            self.video_scene.removeItem(item)
+        
+        # Find mouse position at current time
+        mouse_pos = self._get_mouse_position_at_time(self.current_time)
+        if mouse_pos:
+            x, y = mouse_pos
+            # Draw mouse cursor (circle)
+            cursor = QGraphicsEllipseItem(x - 5, y - 5, 10, 10)
+            cursor.setPen(QPen(QColor(255, 0, 0), 2))
+            cursor.setBrush(QBrush(QColor(255, 0, 0, 100)))
+            self.video_scene.addItem(cursor)
+            
+            # Draw mouse trail (recent positions)
+            recent_positions = self._get_mouse_trail(self.current_time, duration=2.0)  # Last 2 seconds
+            if len(recent_positions) > 1:
+                for i in range(len(recent_positions) - 1):
+                    x1, y1 = recent_positions[i]
+                    x2, y2 = recent_positions[i + 1]
+                    line = QGraphicsLineItem(x1, y1, x2, y2)
+                    # Fade trail (more recent = brighter)
+                    alpha = int(255 * (i / len(recent_positions)))
+                    line.setPen(QPen(QColor(255, 0, 0, alpha), 1))
+                    self.video_scene.addItem(line)
+    
+    def _get_mouse_position_at_time(self, time: float) -> Optional[tuple]:
+        """Get mouse position at a specific time."""
+        if not self.session_start_time:
+            return None
+        
+        target_time = self.session_start_time.timestamp() + time
+        
+        # Find closest tracking data point
+        closest = None
+        min_diff = float('inf')
+        
+        for event in self.tracking_data:
+            timestamp = event.get('timestamp')
+            if not timestamp or not isinstance(timestamp, str):
+                continue
+            try:
+                event_time = datetime.fromisoformat(timestamp).timestamp()
+                diff = abs(event_time - target_time)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest = event
+            except (ValueError, TypeError):
+                continue
+        
+        if closest and 'mouse_position' in closest:
+            pos = closest['mouse_position']
+            if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                return (pos[0], pos[1])
+        
+        return None
+    
+    def _get_mouse_trail(self, time: float, duration: float = 2.0) -> List[tuple]:
+        """Get mouse trail (positions) for the last N seconds."""
+        if not self.session_start_time:
+            return []
+        
+        start_time = self.session_start_time.timestamp() + max(0, time - duration)
+        end_time = self.session_start_time.timestamp() + time
+        
+        trail = []
+        for event in self.tracking_data:
+            timestamp = event.get('timestamp')
+            if not timestamp or not isinstance(timestamp, str):
+                continue
+            try:
+                event_time = datetime.fromisoformat(timestamp).timestamp()
+                if start_time <= event_time <= end_time and 'mouse_position' in event:
+                    pos = event['mouse_position']
+                    if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                        trail.append((pos[0], pos[1]))
+            except (ValueError, TypeError):
+                continue
+        
+        return trail
+    
+    def _on_event_selected(self):
+        """Handle event selection - jump to that time."""
+        selected_rows = self.events_table.selectedIndexes()
+        if selected_rows:
+            row = selected_rows[0].row()
+            time_item = self.events_table.item(row, 0)
+            if time_item:
+                time_str = time_item.text().replace('s', '')
+                try:
+                    self.current_time = float(time_str)
+                    self.timeline_slider.blockSignals(True)
+                    self.timeline_slider.setValue(int(self.current_time * 100))
+                    self.timeline_slider.blockSignals(False)
+                    self._update_overlay()
+                    # Update time label
+                    current_str = f"{int(self.current_time // 60):02d}:{int(self.current_time % 60):02d}"
+                    duration_str = f"{int(self.session_duration // 60):02d}:{int(self.session_duration % 60):02d}"
+                    self.time_label.setText(f"{current_str} / {duration_str}")
+                except ValueError:
+                    pass
 
 
 class MainWindow(QMainWindow):
@@ -1997,8 +2593,20 @@ class MainWindow(QMainWindow):
     
     def _on_review_sessions(self):
         """Handle review sessions request."""
-        # TODO: Implement session review
-        QMessageBox.information(self, "Info", "Session review functionality coming soon!")
+        if not self.current_project:
+            return
+        
+        # Show session selection dialog
+        dialog = SessionSelectionDialog(self.current_project, self.project_manager, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_session:
+            # Open session review window
+            review_window = SessionReviewWindow(
+                self.current_project,
+                dialog.selected_session,
+                self.project_manager,
+                self
+            )
+            review_window.show()
     
     def _on_export_data(self):
         """Handle export data request."""
