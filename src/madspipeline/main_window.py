@@ -1369,12 +1369,23 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             event_data: Event dictionary with type, data, timestamp
         """
         try:
+            event_type = event_data.get('type', 'unknown')
+            event_data_dict = event_data.get('data', {})
+            
+            # Check for session end event
+            if event_type == 'session_end':
+                # Automatically end the session
+                self.statusBar().showMessage("Session ending...", 2000)
+                # Use QTimer to end session in next event loop iteration
+                QTimer.singleShot(500, self._end_session)
+                return
+            
             # Add to tracking data
             bridge_event = {
                 'timestamp': event_data.get('timestamp', datetime.now().isoformat()),
                 'event_type': 'bridge_event',
-                'bridge_event_type': event_data.get('type', 'unknown'),
-                'bridge_event_data': event_data.get('data', {}),
+                'bridge_event_type': event_type,
+                'bridge_event_data': event_data_dict,
                 'session_id': self.session.session_id
             }
             self.tracking_data.append(bridge_event)
@@ -1384,7 +1395,6 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 self.lsl_streamer.push_event(event_data)
             
             # Update status bar
-            event_type = event_data.get('type', 'unknown')
             self.statusBar().showMessage(f"Bridge event: {event_type}", 2000)
             
         except Exception as e:

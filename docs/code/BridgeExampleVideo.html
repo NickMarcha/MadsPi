@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Selective Attention Test - MadsPipeline</title>
+  <!-- Qt-provided JS -->
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <!-- Our reusable bridge -->
+  <script src="madsBridge.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 800px;
+      width: 100%;
+      padding: 40px;
+      position: relative;
+    }
+
+    .step {
+      display: none;
+      animation: fadeIn 0.5s ease-in;
+    }
+
+    .step.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+      font-size: 2em;
+    }
+
+    h2 {
+      color: #667eea;
+      margin-bottom: 20px;
+      font-size: 1.5em;
+    }
+
+    p {
+      color: #666;
+      line-height: 1.6;
+      margin-bottom: 20px;
+      font-size: 1.1em;
+    }
+
+    .question {
+      margin-bottom: 30px;
+    }
+
+    .question label {
+      display: block;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 10px;
+      font-size: 1.1em;
+    }
+
+    .question input[type="radio"],
+    .question input[type="range"] {
+      margin-right: 10px;
+    }
+
+    .question input[type="range"] {
+      width: 100%;
+      margin: 10px 0;
+    }
+
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .radio-option {
+      display: flex;
+      align-items: center;
+      padding: 10px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .radio-option:hover {
+      border-color: #667eea;
+      background-color: #f0f4ff;
+    }
+
+    .radio-option input[type="radio"]:checked + label {
+      color: #667eea;
+      font-weight: 600;
+    }
+
+    .radio-option input[type="radio"]:checked ~ .radio-option {
+      border-color: #667eea;
+    }
+
+    .range-value {
+      text-align: center;
+      font-size: 1.2em;
+      font-weight: 600;
+      color: #667eea;
+      margin-top: 5px;
+    }
+
+    .button {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 15px 40px;
+      font-size: 1.1em;
+      border-radius: 50px;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-weight: 600;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+      margin-top: 20px;
+    }
+
+    .button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    }
+
+    .button:active {
+      transform: translateY(0);
+    }
+
+    .button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .video-container {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      margin: 0 auto;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .video-container video {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .video-instructions {
+      text-align: center;
+      margin-bottom: 30px;
+      padding: 20px;
+      background: #f0f4ff;
+      border-radius: 10px;
+      border-left: 4px solid #667eea;
+    }
+
+    .video-instructions strong {
+      color: #667eea;
+      font-size: 1.2em;
+    }
+
+    .progress-bar {
+      height: 4px;
+      background: #e0e0e0;
+      border-radius: 2px;
+      margin-bottom: 30px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+      transition: width 0.3s ease;
+    }
+
+    .step-indicator {
+      text-align: center;
+      color: #999;
+      margin-bottom: 20px;
+      font-size: 0.9em;
+    }
+
+    .explainer-box {
+      background: #fff3cd;
+      border: 2px solid #ffc107;
+      border-radius: 10px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+
+    .explainer-box h3 {
+      color: #856404;
+      margin-bottom: 10px;
+    }
+
+    .explainer-box p {
+      color: #856404;
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <!-- Progress Bar -->
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+    </div>
+
+    <!-- Step 1: Initial Questionnaire -->
+    <div class="step active" id="step1">
+      <div class="step-indicator">Step 1 of 4</div>
+      <h1>Attention Span Assessment</h1>
+      <p>Please answer the following questions about your attention span and focus.</p>
+
+      <form id="initialQuestionnaire">
+        <div class="question">
+          <label>1. How would you rate your ability to maintain focus on a single task?</label>
+          <div class="radio-group">
+            <div class="radio-option">
+              <input type="radio" name="focus_ability" value="excellent" id="focus1" required>
+              <label for="focus1">Excellent - I can focus for long periods without distraction</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="focus_ability" value="good" id="focus2" required>
+              <label for="focus2">Good - I can usually maintain focus, but sometimes get distracted</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="focus_ability" value="average" id="focus3" required>
+              <label for="focus3">Average - I find it moderately difficult to stay focused</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="focus_ability" value="poor" id="focus4" required>
+              <label for="focus4">Poor - I struggle to maintain focus for extended periods</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="question">
+          <label>2. How often do you find yourself getting distracted while working or studying?</label>
+          <div class="radio-group">
+            <div class="radio-option">
+              <input type="radio" name="distraction_frequency" value="rarely" id="distract1" required>
+              <label for="distract1">Rarely - I rarely get distracted</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="distraction_frequency" value="sometimes" id="distract2" required>
+              <label for="distract2">Sometimes - I get distracted occasionally</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="distraction_frequency" value="often" id="distract3" required>
+              <label for="distract3">Often - I get distracted frequently</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="distraction_frequency" value="very_often" id="distract4" required>
+              <label for="distract4">Very Often - I get distracted almost constantly</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="question">
+          <label>3. On a scale of 1-10, how confident are you in your ability to notice important details?</label>
+          <input type="range" name="detail_confidence" id="detailConfidence" min="1" max="10" value="5" required>
+          <div class="range-value" id="detailValue">5</div>
+        </div>
+
+        <button type="submit" class="button">Continue</button>
+      </form>
+    </div>
+
+    <!-- Step 2: Video Explanation -->
+    <div class="step" id="step2">
+      <div class="step-indicator">Step 2 of 4</div>
+      <h1>Video Instructions</h1>
+      
+      <div class="explainer-box">
+        <h3>📹 What You'll Watch</h3>
+        <p>
+          You are about to watch a short video. This is the <strong>only thing you need to focus on</strong> 
+          for the next few moments. Please pay close attention to the video content.
+        </p>
+      </div>
+
+      <p style="margin-top: 30px;">
+        The video will start automatically and cannot be paused. Once the video finishes playing, 
+        you will automatically proceed to the next step.
+      </p>
+
+      <p style="text-align: center; margin-top: 40px;">
+        <button class="button" onclick="goToStep(3)">I'm Ready - Start Video</button>
+      </p>
+    </div>
+
+    <!-- Step 3: Video -->
+    <div class="step" id="step3">
+      <div class="step-indicator">Step 3 of 4</div>
+      <h1>Watch the Video</h1>
+      
+      <div class="video-instructions">
+        <strong>Please watch this video carefully.</strong>
+      </div>
+
+      <div class="video-container">
+        <video id="attentionVideo" autoplay playsinline>
+          <source src="../videos/selective attention test.mp4" type="video/mp4">
+          Your browser does not support the video tag.
+        </video>
+      </div>
+
+      <p style="text-align: center; margin-top: 20px; color: #999;">
+        The video will automatically advance when finished...
+      </p>
+    </div>
+
+    <!-- Step 4: Wrap-up Questionnaire -->
+    <div class="step" id="step4">
+      <div class="step-indicator">Step 4 of 4</div>
+      <h1>Post-Video Assessment</h1>
+      <p>Now that you've watched the video, please answer these follow-up questions.</p>
+
+      <form id="wrapupQuestionnaire">
+        <div class="question">
+          <label>1. How would you rate your ability to maintain focus now?</label>
+          <div class="radio-group">
+            <div class="radio-option">
+              <input type="radio" name="post_focus" value="excellent" id="post_focus1" required>
+              <label for="post_focus1">Excellent</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="post_focus" value="good" id="post_focus2" required>
+              <label for="post_focus2">Good</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="post_focus" value="average" id="post_focus3" required>
+              <label for="post_focus3">Average</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="post_focus" value="poor" id="post_focus4" required>
+              <label for="post_focus4">Poor</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="question">
+          <label>2. Did you notice anything unexpected in the video?</label>
+          <div class="radio-group">
+            <div class="radio-option">
+              <input type="radio" name="noticed_unexpected" value="yes" id="notice1" required>
+              <label for="notice1">Yes, I noticed something unexpected</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="noticed_unexpected" value="no" id="notice2" required>
+              <label for="notice2">No, I didn't notice anything unexpected</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="noticed_unexpected" value="unsure" id="notice3" required>
+              <label for="notice3">I'm not sure</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="question">
+          <label>3. On a scale of 1-10, how would you rate your attention to detail after watching the video?</label>
+          <input type="range" name="post_detail_rating" id="postDetailRating" min="1" max="10" value="5" required>
+          <div class="range-value" id="postDetailValue">5</div>
+        </div>
+
+        <div class="question">
+          <label>4. How has your perception of your attention span changed?</label>
+          <div class="radio-group">
+            <div class="radio-option">
+              <input type="radio" name="perception_change" value="improved" id="percept1" required>
+              <label for="percept1">I feel more confident about my attention span</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="perception_change" value="same" id="percept2" required>
+              <label for="percept2">My perception hasn't changed</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" name="perception_change" value="worsened" id="percept3" required>
+              <label for="percept3">I'm less confident about my attention span</label>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="button">Finalize Answers & End Session</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    let currentStep = 1;
+    const totalSteps = 4;
+    let sessionData = {
+      initial_questionnaire: {},
+      video_watched: false,
+      wrapup_questionnaire: {}
+    };
+
+    // Initialize bridge
+    document.addEventListener("DOMContentLoaded", function () {
+      setupBridge(function (msg) {
+        console.log("From Python:", msg);
+      });
+
+      // Send page load event
+      setTimeout(function () {
+        sendEvent('page_load', {
+          page: 'BridgeExampleVideo',
+          timestamp: Date.now()
+        });
+      }, 100);
+
+      // Setup range sliders
+      const detailConfidence = document.getElementById('detailConfidence');
+      const detailValue = document.getElementById('detailValue');
+      detailConfidence.addEventListener('input', function () {
+        detailValue.textContent = this.value;
+      });
+
+      const postDetailRating = document.getElementById('postDetailRating');
+      const postDetailValue = document.getElementById('postDetailValue');
+      postDetailRating.addEventListener('input', function () {
+        postDetailValue.textContent = this.value;
+      });
+
+      // Setup video
+      const video = document.getElementById('attentionVideo');
+      if (video) {
+        // Disable all controls
+        video.controls = false;
+        video.controlsList = 'nodownload nofullscreen noremoteplayback';
+        video.disablePictureInPicture = true;
+        
+        // Prevent right-click context menu
+        video.addEventListener('contextmenu', function (e) {
+          e.preventDefault();
+          return false;
+        });
+
+        // Prevent keyboard shortcuts
+        video.addEventListener('keydown', function (e) {
+          // Prevent space (play/pause), arrow keys (seek), etc.
+          if ([32, 37, 38, 39, 40].includes(e.keyCode)) {
+            e.preventDefault();
+            return false;
+          }
+        });
+
+        // Handle video end
+        video.addEventListener('ended', function () {
+          sessionData.video_watched = true;
+          sendEvent('video_completed', {
+            video_name: 'selective attention test',
+            duration: video.duration,
+            timestamp: Date.now()
+          });
+          
+          // Auto-advance to next step after short delay
+          setTimeout(function () {
+            goToStep(4);
+          }, 1000);
+        });
+
+        // Track video play
+        video.addEventListener('play', function () {
+          sendEvent('video_started', {
+            video_name: 'selective attention test',
+            timestamp: Date.now()
+          });
+        });
+
+        // Prevent pause - immediately resume if paused
+        video.addEventListener('pause', function () {
+          if (!video.ended) {
+            video.play().catch(function(err) {
+              console.error("Could not resume video:", err);
+            });
+          }
+        });
+
+        // Handle video errors
+        video.addEventListener('error', function(e) {
+          console.error("Video error:", e);
+          sendEvent('video_error', {
+            error: 'Video failed to load or play',
+            timestamp: Date.now()
+          });
+        });
+      }
+
+      // Setup forms
+      document.getElementById('initialQuestionnaire').addEventListener('submit', function (e) {
+        e.preventDefault();
+        collectFormData(this, 'initial_questionnaire');
+        goToStep(2);
+      });
+
+      document.getElementById('wrapupQuestionnaire').addEventListener('submit', function (e) {
+        e.preventDefault();
+        collectFormData(this, 'wrapup_questionnaire');
+        finalizeSession();
+      });
+    });
+
+    function collectFormData(form, category) {
+      const formData = new FormData(form);
+      const data = {};
+      
+      for (let [key, value] of formData.entries()) {
+        data[key] = value;
+      }
+      
+      sessionData[category] = data;
+      
+      // Send each answer through bridge
+      for (let [key, value] of formData.entries()) {
+        sendEvent('questionnaire_answer', {
+          category: category,
+          question: key,
+          answer: value,
+          timestamp: Date.now()
+        });
+      }
+    }
+
+    function goToStep(step) {
+      // Hide current step
+      document.getElementById('step' + currentStep).classList.remove('active');
+      
+      // Show new step
+      currentStep = step;
+      document.getElementById('step' + currentStep).classList.add('active');
+      
+      // Update progress bar
+      const progress = (currentStep / totalSteps) * 100;
+      document.getElementById('progressFill').style.width = progress + '%';
+      
+      // Send step change event
+      sendEvent('step_change', {
+        step: currentStep,
+        timestamp: Date.now()
+      });
+
+      // Auto-play video when step 3 is reached
+      if (step === 3) {
+        setTimeout(function () {
+          const video = document.getElementById('attentionVideo');
+          if (video) {
+            video.play().catch(function (error) {
+              console.error("Video autoplay failed:", error);
+              // Try to play on user interaction
+              document.addEventListener('click', function playVideo() {
+                video.play();
+                document.removeEventListener('click', playVideo);
+              }, { once: true });
+            });
+          }
+        }, 500);
+      }
+    }
+
+    function finalizeSession() {
+      // Send all session data
+      sendEvent('session_complete', {
+        session_data: sessionData,
+        timestamp: Date.now()
+      });
+
+      // Send session end event (this will trigger session end in Python)
+      sendEvent('session_end', {
+        reason: 'user_finalized',
+        timestamp: Date.now()
+      });
+
+      // Show completion message
+      const container = document.querySelector('.container');
+      container.innerHTML = `
+        <div style="text-align: center; padding: 40px;">
+          <h1 style="color: #667eea; margin-bottom: 20px;">✓ Session Complete</h1>
+          <p style="color: #666; font-size: 1.2em;">
+            Thank you for participating! Your responses have been recorded.
+          </p>
+          <p style="color: #999; margin-top: 20px;">
+            The session will end automatically...
+          </p>
+        </div>
+      `;
+    }
+  </script>
+</body>
+
+</html>
+
