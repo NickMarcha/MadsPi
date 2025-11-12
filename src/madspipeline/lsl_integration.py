@@ -131,7 +131,7 @@ class LSLMouseTrackingStreamer:
             x = float(mouse_pos[0]) if isinstance(mouse_pos, (tuple, list)) and len(mouse_pos) >= 2 else 0.0
             y = float(mouse_pos[1]) if isinstance(mouse_pos, (tuple, list)) and len(mouse_pos) >= 2 else 0.0
             
-            # Extract event type (encode as float: 0=position, 1=press, 2=release, 3=move)
+            # Extract event type (encode as float: 0=position, 1=press, 2=release, 3=move, 4=scroll)
             event_type_str = tracking_data.get('event_type', '')
             if event_type_str == 'mouse_press':
                 event_type = 1.0
@@ -139,6 +139,8 @@ class LSLMouseTrackingStreamer:
                 event_type = 2.0
             elif event_type_str == 'mouse_move':
                 event_type = 3.0
+            elif event_type_str == 'mouse_scroll':
+                event_type = 4.0
             else:
                 event_type = 0.0  # Regular position tracking
             

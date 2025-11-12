@@ -112,6 +112,7 @@
       border-radius: 8px;
       cursor: pointer;
       transition: all 0.3s;
+      position: relative;
     }
 
     .radio-option:hover {
@@ -119,13 +120,25 @@
       background-color: #f0f4ff;
     }
 
+    .radio-option input[type="radio"] {
+      margin-right: 10px;
+      cursor: pointer;
+    }
+
+    .radio-option label {
+      flex: 1;
+      cursor: pointer;
+      margin: 0;
+    }
+
     .radio-option input[type="radio"]:checked+label {
       color: #667eea;
       font-weight: 600;
     }
 
-    .radio-option input[type="radio"]:checked~.radio-option {
+    .radio-option:has(input[type="radio"]:checked) {
       border-color: #667eea;
+      background-color: #f0f4ff;
     }
 
     .range-value {
@@ -726,6 +739,21 @@
           });
         }
       }
+
+      // Make radio option boxes fully clickable
+      document.querySelectorAll('.radio-option').forEach(function(option) {
+        option.addEventListener('click', function(e) {
+          // Only trigger if not clicking directly on the radio input or label
+          if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'LABEL') {
+            const radio = option.querySelector('input[type="radio"]');
+            if (radio && !radio.disabled) {
+              radio.checked = true;
+              // Trigger change event to ensure form validation works
+              radio.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }
+        });
+      });
 
       // Setup forms
       document.getElementById('initialQuestionnaire').addEventListener('submit', function (e) {

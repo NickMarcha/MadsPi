@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QUrl, QPointF, QRectF
-from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPen, QBrush, QPainter
+from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPen, QBrush, QPainter, QWheelEvent
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebChannel import QWebChannel
@@ -1667,6 +1667,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.web_view.mousePressEvent = self._on_mouse_press
         self.web_view.mouseReleaseEvent = self._on_mouse_release
         self.web_view.mouseMoveEvent = self._on_mouse_move
+        self.web_view.wheelEvent = self._on_wheel_event
     
     def _setup_screen_recording(self):
         """Set up screen recording."""
@@ -1796,6 +1797,49 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         # Call parent's mouse move event
         super(QWebEngineView, self.web_view).mouseMoveEvent(event)
+    
+    def _on_wheel_event(self, event: QWheelEvent):
+        """Handle wheel scroll events."""
+        # Use globalPos() for compatibility (Qt5/Qt6)
+        try:
+            global_pos = event.globalPosition().toPoint()
+        except AttributeError:
+            # Fallback for Qt5
+            global_pos = event.globalPos()
+        cursor_pos = self.web_view.mapFromGlobal(global_pos)
+        abs_x, abs_y = cursor_pos.x(), cursor_pos.y()
+        
+        # Normalize coordinates if configured
+        norm_x, norm_y = self._normalize_mouse_coordinates(abs_x, abs_y)
+        
+        # Get scroll delta (angleDelta gives degrees, we'll use pixels for consistency)
+        # angleDelta() returns QPoint with x and y deltas in 1/8th degree units
+        # Convert to pixels: typically 1 degree = ~15 pixels, so 1/8 degree = ~1.875 pixels
+        angle_delta = event.angleDelta()
+        scroll_delta_x = angle_delta.x() / 8.0 * 15.0  # Convert to approximate pixels
+        scroll_delta_y = angle_delta.y() / 8.0 * 15.0
+        
+        # Use pixelDelta if available (more accurate)
+        pixel_delta = event.pixelDelta()
+        if not pixel_delta.isNull():
+            scroll_delta_x = pixel_delta.x()
+            scroll_delta_y = pixel_delta.y()
+        
+        tracking_point = {
+            'timestamp': datetime.now().isoformat(),
+            'mouse_position': (norm_x, norm_y),  # Store normalized coordinates
+            'absolute_position': (abs_x, abs_y),  # Also store absolute for reference
+            'event_type': 'mouse_scroll',
+            'scroll_delta': (scroll_delta_x, scroll_delta_y),
+            'session_id': self.session.session_id
+        }
+        
+        # Stream to LSL (all data goes through LSL, no separate tracking_data)
+        if self.lsl_mouse_streamer:
+            self.lsl_mouse_streamer.push_tracking_data(tracking_point)
+        
+        # Call parent's wheel event
+        super(QWebEngineView, self.web_view).wheelEvent(event)
     
     def _end_session(self):
         """End the session and save data."""
@@ -2357,6 +2401,12 @@ class SessionReviewWindow(QMainWindow):
         self.play_button.clicked.connect(self._toggle_playback)
         top_bar.addWidget(self.play_button)
         
+        # Play from beginning button (hidden initially, shown when at end)
+        self.play_from_start_button = QPushButton("⏮ Play from Beginning")
+        self.play_from_start_button.clicked.connect(self._play_from_beginning)
+        self.play_from_start_button.setVisible(False)
+        top_bar.addWidget(self.play_from_start_button)
+        
         self.time_label = QLabel("00:00 / 00:00")
         top_bar.addWidget(self.time_label)
         
@@ -2382,6 +2432,18 @@ class SessionReviewWindow(QMainWindow):
         self.video_view = QGraphicsView(self.video_scene)
         self.video_view.setMinimumSize(800, 600)
         self.video_view.setStyleSheet("background-color: #000;")
+        # Enable aspect ratio preservation and fit to view
+        self.video_view.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.video_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Remove scroll bars - video should fit the view
+        self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Store original video dimensions for coordinate scaling
+        self.video_original_width: Optional[float] = None
+        self.video_original_height: Optional[float] = None
+        self.video_scale_factor: float = 1.0
+        self.video_offset_x: float = 0.0
+        self.video_offset_y: float = 0.0
         
         # Add placeholder text (will be removed if video loads)
         if not self.video_cap:
@@ -2568,7 +2630,7 @@ class SessionReviewWindow(QMainWindow):
                     y = float(data[1]) if len(data) > 1 else 0.0
                     event_type_val = data[2] if len(data) > 2 else 0
                     # Decode event type
-                    event_type_map = {0.0: 'position', 1.0: 'press', 2.0: 'release', 3.0: 'move'}
+                    event_type_map = {0.0: 'position', 1.0: 'press', 2.0: 'release', 3.0: 'move', 4.0: 'scroll'}
                     event_type_str = event_type_map.get(event_type_val, f'unknown({event_type_val})')
                     self.lsl_table.setItem(i, 2, QTableWidgetItem("Mouse"))
                     # Display with precision - if values are 0-1 (normalized), show 3 decimals, otherwise show as integers
@@ -2606,9 +2668,23 @@ class SessionReviewWindow(QMainWindow):
             self.is_playing = False
             self.play_button.setText("▶ Play")
         else:
+            # Hide play from beginning button when starting playback
+            self.play_from_start_button.setVisible(False)
             self.playback_timer.start()
             self.is_playing = True
             self.play_button.setText("⏸ Pause")
+    
+    def _play_from_beginning(self):
+        """Reset playback to beginning and start playing."""
+        self.current_time = 0.0
+        self.timeline_slider.blockSignals(True)
+        self.timeline_slider.setValue(0)
+        self.timeline_slider.blockSignals(False)
+        self.play_from_start_button.setVisible(False)
+        self._update_overlay()
+        # Start playing
+        if not self.is_playing:
+            self._toggle_playback()
     
     def _update_playback(self):
         """Update playback position."""
@@ -2623,6 +2699,8 @@ class SessionReviewWindow(QMainWindow):
             if self.current_time >= self.session_duration:
                 self.current_time = self.session_duration
                 self._toggle_playback()  # Stop at end
+                # Show play from beginning button
+                self.play_from_start_button.setVisible(True)
             
             # Update timeline slider
             self.timeline_slider.blockSignals(True)
@@ -2641,6 +2719,13 @@ class SessionReviewWindow(QMainWindow):
         """Handle timeline slider change."""
         # Update time regardless of seeking state (allows real-time updates while dragging)
         self.current_time = value / 100.0
+        
+        # Hide/show play from beginning button based on position
+        if self.current_time >= self.session_duration:
+            self.play_from_start_button.setVisible(True)
+        else:
+            self.play_from_start_button.setVisible(False)
+        
         self._update_overlay()
         # Update time label
         current_str = f"{int(self.current_time // 60):02d}:{int(self.current_time % 60):02d}"
@@ -2666,15 +2751,48 @@ class SessionReviewWindow(QMainWindow):
                     h, w, ch = frame_rgb.shape
                     bytes_per_line = ch * w
                     
+                    # Store original video dimensions (first frame)
+                    if self.video_original_width is None:
+                        self.video_original_width = float(w)
+                        self.video_original_height = float(h)
+                    
                     # Create QPixmap from frame
                     from PySide6.QtGui import QImage
                     q_image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
                     pixmap = QPixmap.fromImage(q_image)
                     
-                    # Clear scene and add video frame
+                    # Calculate view size for fitting
+                    view_size = self.video_view.size()
+                    view_width = float(view_size.width())
+                    view_height = float(view_size.height())
+                    
+                    # Calculate scale to fit while maintaining aspect ratio
+                    scale_x = view_width / w if w > 0 else 1.0
+                    scale_y = view_height / h if h > 0 else 1.0
+                    self.video_scale_factor = min(scale_x, scale_y)  # Use smaller scale to fit
+                    
+                    # Calculate scaled dimensions
+                    scaled_w = w * self.video_scale_factor
+                    scaled_h = h * self.video_scale_factor
+                    
+                    # Center the video in the view
+                    self.video_offset_x = (view_width - scaled_w) / 2.0
+                    self.video_offset_y = (view_height - scaled_h) / 2.0
+                    
+                    # Scale the pixmap
+                    scaled_pixmap = pixmap.scaled(
+                        int(scaled_w), int(scaled_h),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                    
+                    # Clear scene and add video frame at calculated position
                     self.video_scene.clear()
-                    self.video_scene.addPixmap(pixmap)
-                    self.video_scene.setSceneRect(0, 0, w, h)
+                    pixmap_item = self.video_scene.addPixmap(scaled_pixmap)
+                    pixmap_item.setPos(self.video_offset_x, self.video_offset_y)
+                    
+                    # Set scene rect to view size (not video size) for proper coordinate mapping
+                    self.video_scene.setSceneRect(0, 0, view_width, view_height)
             except Exception as e:
                 # Silently handle errors (video might be unavailable)
                 pass
@@ -2693,8 +2811,31 @@ class SessionReviewWindow(QMainWindow):
         mouse_pos = self._get_mouse_position_at_time(self.current_time)
         if mouse_pos:
             x, y = mouse_pos
+            
+            # Transform coordinates based on whether they're normalized or absolute
+            if self.video_original_width and self.video_original_height:
+                # Check if coordinates are normalized (0-1 range)
+                is_normalized = (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0)
+                
+                if is_normalized:
+                    # Normalized coordinates: scale to video dimensions, then to view
+                    # First convert to video pixel coordinates
+                    video_x = x * self.video_original_width
+                    video_y = y * self.video_original_height
+                    # Then scale and offset to view coordinates
+                    view_x = video_x * self.video_scale_factor + self.video_offset_x
+                    view_y = video_y * self.video_scale_factor + self.video_offset_y
+                else:
+                    # Absolute pixel coordinates: scale directly to view
+                    view_x = x * self.video_scale_factor + self.video_offset_x
+                    view_y = y * self.video_scale_factor + self.video_offset_y
+            else:
+                # Fallback: use coordinates directly (shouldn't happen if video loaded)
+                view_x = x
+                view_y = y
+            
             # Draw mouse cursor (circle)
-            cursor = QGraphicsEllipseItem(x - 5, y - 5, 10, 10)
+            cursor = QGraphicsEllipseItem(view_x - 5, view_y - 5, 10, 10)
             cursor.setPen(QPen(QColor(255, 0, 0), 2))
             cursor.setBrush(QBrush(QColor(255, 0, 0, 100)))
             self.video_scene.addItem(cursor)
@@ -2705,7 +2846,30 @@ class SessionReviewWindow(QMainWindow):
                 for i in range(len(recent_positions) - 1):
                     x1, y1 = recent_positions[i]
                     x2, y2 = recent_positions[i + 1]
-                    line = QGraphicsLineItem(x1, y1, x2, y2)
+                    
+                    # Transform trail coordinates the same way
+                    if self.video_original_width and self.video_original_height:
+                        is_norm1 = (0.0 <= x1 <= 1.0 and 0.0 <= y1 <= 1.0)
+                        is_norm2 = (0.0 <= x2 <= 1.0 and 0.0 <= y2 <= 1.0)
+                        
+                        if is_norm1:
+                            view_x1 = x1 * self.video_original_width * self.video_scale_factor + self.video_offset_x
+                            view_y1 = y1 * self.video_original_height * self.video_scale_factor + self.video_offset_y
+                        else:
+                            view_x1 = x1 * self.video_scale_factor + self.video_offset_x
+                            view_y1 = y1 * self.video_scale_factor + self.video_offset_y
+                        
+                        if is_norm2:
+                            view_x2 = x2 * self.video_original_width * self.video_scale_factor + self.video_offset_x
+                            view_y2 = y2 * self.video_original_height * self.video_scale_factor + self.video_offset_y
+                        else:
+                            view_x2 = x2 * self.video_scale_factor + self.video_offset_x
+                            view_y2 = y2 * self.video_scale_factor + self.video_offset_y
+                    else:
+                        view_x1, view_y1 = x1, y1
+                        view_x2, view_y2 = x2, y2
+                    
+                    line = QGraphicsLineItem(view_x1, view_y1, view_x2, view_y2)
                     # Fade trail (more recent = brighter)
                     alpha = int(255 * (i / len(recent_positions)))
                     line.setPen(QPen(QColor(255, 0, 0, alpha), 1))

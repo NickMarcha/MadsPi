@@ -59,12 +59,37 @@ class ScreenRecorder:
         
         # Determine recording region
         if self.window:
-            # Get window geometry
-            geometry = self.window.geometry()
-            self.record_x = geometry.x()
-            self.record_y = geometry.y()
-            self.record_width = geometry.width()
-            self.record_height = geometry.height()
+            # Get window frame geometry in screen coordinates
+            # frameGeometry() includes window decorations and is in screen coordinates
+            frame_geom = self.window.frameGeometry()
+            # For content area, we can use geometry() but need to convert to screen coords
+            # Actually, for recording the window content, we want the client area in screen coords
+            # Get the top-left corner in screen coordinates
+            top_left = self.window.mapToGlobal(self.window.rect().topLeft())
+            # Get window size (client area, not including frame)
+            size = self.window.size()
+            
+            # Convert to screen coordinates
+            # On Windows, we need to account for DPI scaling
+            # mss uses physical pixels, so we need to get the actual screen position
+            screen = self.window.screen()
+            if screen:
+                # Get device pixel ratio for DPI scaling
+                dpr = screen.devicePixelRatio()
+                # Get screen geometry
+                screen_geom = screen.geometry()
+                # Calculate absolute screen position
+                # mapToGlobal gives us the position relative to the screen
+                self.record_x = top_left.x()
+                self.record_y = top_left.y()
+                self.record_width = size.width()
+                self.record_height = size.height()
+            else:
+                # Fallback: use frame geometry
+                self.record_x = frame_geom.x()
+                self.record_y = frame_geom.y()
+                self.record_width = frame_geom.width()
+                self.record_height = frame_geom.height()
         else:
             # Full screen
             with mss.mss() as sct:
@@ -176,13 +201,57 @@ class ScreenRecorder:
                     try:
                         # Update window geometry if recording window
                         if self.window:
-                            geometry = self.window.geometry()
-                            capture_region = {
-                                'top': geometry.y(),
-                                'left': geometry.x(),
-                                'width': geometry.width(),
-                                'height': geometry.height()
-                            }
+                            # Get current window position and size in screen coordinates
+                            top_left = self.window.mapToGlobal(self.window.rect().topLeft())
+                            size = self.window.size()
+                            
+                            # Get the screen that contains this window
+                            screen = self.window.screen()
+                            if screen:
+                                # Get all monitors from mss
+                                monitors = sct.monitors
+                                
+                                # Find which monitor contains the window center
+                                window_center_x = top_left.x() + size.width() // 2
+                                window_center_y = top_left.y() + size.height() // 2
+                                
+                                # Use the monitor that contains the window center
+                                # Monitor 0 is all monitors combined, 1+ are individual monitors
+                                target_monitor = None
+                                for i in range(1, len(monitors)):
+                                    mon = monitors[i]
+                                    if (mon['left'] <= window_center_x <= mon['left'] + mon['width'] and
+                                        mon['top'] <= window_center_y <= mon['top'] + mon['height']):
+                                        target_monitor = mon
+                                        break
+                                
+                                # If window is on a specific monitor, use that monitor's coordinate system
+                                if target_monitor:
+                                    # Convert window position relative to the monitor
+                                    # mss coordinates are relative to the monitor, not the entire screen
+                                    capture_region = {
+                                        'top': top_left.y() - target_monitor['top'],
+                                        'left': top_left.x() - target_monitor['left'],
+                                        'width': size.width(),
+                                        'height': size.height()
+                                    }
+                                else:
+                                    # Fallback: use primary monitor coordinates
+                                    capture_region = {
+                                        'top': top_left.y(),
+                                        'left': top_left.x(),
+                                        'width': size.width(),
+                                        'height': size.height()
+                                    }
+                            else:
+                                # Fallback: use geometry directly
+                                geometry = self.window.geometry()
+                                capture_region = {
+                                    'top': geometry.y(),
+                                    'left': geometry.x(),
+                                    'width': geometry.width(),
+                                    'height': geometry.height()
+                                }
                         
                         # Capture screen region
                         screenshot = sct.grab(capture_region)
