@@ -50,6 +50,7 @@
         opacity: 0;
         transform: translateY(20px);
       }
+
       to {
         opacity: 1;
         transform: translateY(0);
@@ -118,12 +119,12 @@
       background-color: #f0f4ff;
     }
 
-    .radio-option input[type="radio"]:checked + label {
+    .radio-option input[type="radio"]:checked+label {
       color: #667eea;
       font-weight: 600;
     }
 
-    .radio-option input[type="radio"]:checked ~ .radio-option {
+    .radio-option input[type="radio"]:checked~.radio-option {
       border-color: #667eea;
     }
 
@@ -306,17 +307,17 @@
     <div class="step" id="step2">
       <div class="step-indicator">Step 2 of 4</div>
       <h1>Video Instructions</h1>
-      
+
       <div class="explainer-box">
         <h3>📹 What You'll Watch</h3>
         <p>
-          You are about to watch a short video. This is the <strong>only thing you need to focus on</strong> 
+          You are about to watch a short video. This is the <strong>only thing you need to focus on</strong>
           for the next few moments. Please pay close attention to the video content.
         </p>
       </div>
 
       <p style="margin-top: 30px;">
-        The video will start automatically and cannot be paused. Once the video finishes playing, 
+        The video will start automatically and cannot be paused. Once the video finishes playing,
         you will automatically proceed to the next step.
       </p>
 
@@ -329,16 +330,29 @@
     <div class="step" id="step3">
       <div class="step-indicator">Step 3 of 4</div>
       <h1>Watch the Video</h1>
-      
+
       <div class="video-instructions">
         <strong>Please watch this video carefully.</strong>
       </div>
 
       <div class="video-container">
-        <video id="attentionVideo" autoplay playsinline>
+        <video id="attentionVideo" controls playsinline preload="auto">
+          <!-- Try WebM first (works without proprietary codecs) -->
+          <source src="../videos/selective attention test.webm" type="video/webm">
+          <!-- Fallback to MP4 (requires H.264 codec support) -->
           <source src="../videos/selective attention test.mp4" type="video/mp4">
           Your browser does not support the video tag.
         </video>
+      </div>
+
+      <div style="text-align: center; margin-top: 20px;">
+        <button class="button" id="debugPlayButton" style="background: #28a745; display: none;">
+          [DEBUG] Start Video Manually
+        </button>
+        <button class="button" id="debugSkipButton"
+          style="background: #ffc107; color: #000; margin-left: 10px; display: none;">
+          [DEBUG] Skip Video
+        </button>
       </div>
 
       <p style="text-align: center; margin-top: 20px; color: #999;">
@@ -461,25 +475,11 @@
       // Setup video
       const video = document.getElementById('attentionVideo');
       if (video) {
-        // Disable all controls
-        video.controls = false;
-        video.controlsList = 'nodownload nofullscreen noremoteplayback';
-        video.disablePictureInPicture = true;
-        
-        // Prevent right-click context menu
-        video.addEventListener('contextmenu', function (e) {
-          e.preventDefault();
-          return false;
-        });
+        // Enable video controls (user can manually control playback)
+        video.controls = true;
 
-        // Prevent keyboard shortcuts
-        video.addEventListener('keydown', function (e) {
-          // Prevent space (play/pause), arrow keys (seek), etc.
-          if ([32, 37, 38, 39, 40].includes(e.keyCode)) {
-            e.preventDefault();
-            return false;
-          }
-        });
+        // Set preload to auto to ensure video loads
+        video.preload = 'auto';
 
         // Handle video end
         video.addEventListener('ended', function () {
@@ -489,7 +489,7 @@
             duration: video.duration,
             timestamp: Date.now()
           });
-          
+
           // Auto-advance to next step after short delay
           setTimeout(function () {
             goToStep(4);
@@ -498,29 +498,216 @@
 
         // Track video play
         video.addEventListener('play', function () {
+          console.log("[DEBUG] Video 'play' event fired. Paused:", video.paused, "CurrentTime:", video.currentTime);
           sendEvent('video_started', {
             video_name: 'selective attention test',
+            paused: video.paused,
+            currentTime: video.currentTime,
+            readyState: video.readyState,
             timestamp: Date.now()
           });
+        });
+
+        // Track video playing state
+        video.addEventListener('playing', function () {
+          console.log("[DEBUG] Video 'playing' event fired - video is actually playing!");
+        });
+
+        // Track video waiting/buffering
+        video.addEventListener('waiting', function () {
+          console.log("[DEBUG] Video 'waiting' event - buffering");
         });
 
         // Prevent pause - immediately resume if paused
         video.addEventListener('pause', function () {
           if (!video.ended) {
-            video.play().catch(function(err) {
+            video.play().catch(function (err) {
               console.error("Could not resume video:", err);
             });
           }
         });
 
         // Handle video errors
-        video.addEventListener('error', function(e) {
-          console.error("Video error:", e);
+        video.addEventListener('error', function (e) {
+          console.error("[DEBUG] Video error event:", e);
+          const errorCode = video.error ? video.error.code : 'unknown';
+          const errorMessage = video.error ? video.error.message : 'Unknown error';
+          console.error("[DEBUG] Video error code:", errorCode, "message:", errorMessage);
+          console.error("[DEBUG] Video error details:", {
+            code: errorCode,
+            message: errorMessage,
+            networkState: video.networkState,
+            readyState: video.readyState,
+            src: video.src,
+            currentSrc: video.currentSrc
+          });
           sendEvent('video_error', {
             error: 'Video failed to load or play',
+            error_code: errorCode,
+            error_message: errorMessage,
+            networkState: video.networkState,
+            readyState: video.readyState,
+            src: video.src,
+            currentSrc: video.currentSrc,
             timestamp: Date.now()
           });
         });
+
+        // Handle video stalled (buffering issues)
+        video.addEventListener('stalled', function () {
+          console.error("[DEBUG] Video stalled - buffering issue");
+          sendEvent('video_error', {
+            error: 'Video stalled during buffering',
+            timestamp: Date.now()
+          });
+        });
+
+        // Handle video suspend (loading paused)
+        video.addEventListener('suspend', function () {
+          console.warn("[DEBUG] Video loading suspended");
+        });
+
+        // Handle video loading
+        video.addEventListener('loadedmetadata', function () {
+          console.log("Video metadata loaded, duration:", video.duration);
+          sendEvent('video_loaded', {
+            duration: video.duration,
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight,
+            timestamp: Date.now()
+          });
+        });
+
+        // Handle video canplay event
+        video.addEventListener('canplay', function () {
+          console.log("Video can play");
+          // Try to play if we're on step 3
+          if (currentStep === 3) {
+            video.play().catch(function (err) {
+              console.error("Video play on canplay failed:", err);
+              // Show debug button if autoplay fails
+              const debugBtn = document.getElementById('debugPlayButton');
+              if (debugBtn) {
+                debugBtn.style.display = 'inline-block';
+              }
+            });
+          }
+        });
+
+        // Setup debug skip button
+        const debugSkipButton = document.getElementById('debugSkipButton');
+        if (debugSkipButton) {
+          debugSkipButton.addEventListener('click', function () {
+            console.log("[DEBUG] Skip video button clicked");
+            sendEvent('debug_video_skip', {
+              action: 'video_skipped',
+              current_time: video.currentTime,
+              duration: video.duration,
+              timestamp: Date.now()
+            });
+
+            // Stop the video
+            video.pause();
+            video.currentTime = 0;
+
+            // Mark video as watched and advance to next step
+            sessionData.video_watched = true;
+            sendEvent('video_completed', {
+              video_name: 'selective attention test',
+              duration: video.duration,
+              skipped: true,
+              timestamp: Date.now()
+            });
+
+            // Auto-advance to next step
+            setTimeout(function () {
+              goToStep(4);
+            }, 500);
+          });
+        }
+
+        // Setup debug button for manual video start
+        const debugPlayButton = document.getElementById('debugPlayButton');
+        if (debugPlayButton) {
+          debugPlayButton.addEventListener('click', function () {
+            console.log("[DEBUG] Manual video play button clicked");
+            console.log("[DEBUG] Video state before play:", {
+              paused: video.paused,
+              readyState: video.readyState,
+              networkState: video.networkState,
+              currentTime: video.currentTime,
+              duration: video.duration,
+              muted: video.muted,
+              src: video.src,
+              currentSrc: video.currentSrc
+            });
+
+            sendEvent('debug_video_play', {
+              action: 'manual_play_triggered',
+              video_state: {
+                paused: video.paused,
+                readyState: video.readyState,
+                networkState: video.networkState
+              },
+              timestamp: Date.now()
+            });
+
+            // Ensure video is muted (required for autoplay in many browsers)
+            video.muted = true;
+
+            // Try to load first if needed
+            if (video.readyState < 2) {
+              console.log("[DEBUG] Video not ready, calling load() first");
+              video.load();
+            }
+
+            video.play().then(function () {
+              console.log("[DEBUG] Video play() promise resolved");
+              // Check if actually playing after a delay
+              setTimeout(function () {
+                if (video.paused) {
+                  console.error("[DEBUG] Video play() resolved but still paused!");
+                  console.error("[DEBUG] Video state:", {
+                    paused: video.paused,
+                    readyState: video.readyState,
+                    networkState: video.networkState,
+                    error: video.error
+                  });
+                  sendEvent('debug_video_play_failed', {
+                    action: 'manual_play_promise_resolved_but_still_paused',
+                    video_state: {
+                      paused: video.paused,
+                      readyState: video.readyState,
+                      networkState: video.networkState
+                    },
+                    timestamp: Date.now()
+                  });
+                } else {
+                  console.log("[DEBUG] Video is actually playing via debug button!");
+                  sendEvent('debug_video_play_success', {
+                    action: 'manual_play_success',
+                    timestamp: Date.now()
+                  });
+                  debugPlayButton.style.display = 'none';
+                }
+              }, 500);
+            }).catch(function (err) {
+              console.error("[DEBUG] Video play() promise rejected:", err);
+              console.error("[DEBUG] Error details:", {
+                name: err.name,
+                message: err.message,
+                stack: err.stack
+              });
+              sendEvent('debug_video_play_failed', {
+                action: 'manual_play_failed',
+                error_name: err.name,
+                error_message: err.message,
+                error_details: err.toString(),
+                timestamp: Date.now()
+              });
+            });
+          });
+        }
       }
 
       // Setup forms
@@ -540,13 +727,13 @@
     function collectFormData(form, category) {
       const formData = new FormData(form);
       const data = {};
-      
+
       for (let [key, value] of formData.entries()) {
         data[key] = value;
       }
-      
+
       sessionData[category] = data;
-      
+
       // Send each answer through bridge
       for (let [key, value] of formData.entries()) {
         sendEvent('questionnaire_answer', {
@@ -561,15 +748,15 @@
     function goToStep(step) {
       // Hide current step
       document.getElementById('step' + currentStep).classList.remove('active');
-      
+
       // Show new step
       currentStep = step;
       document.getElementById('step' + currentStep).classList.add('active');
-      
+
       // Update progress bar
       const progress = (currentStep / totalSteps) * 100;
       document.getElementById('progressFill').style.width = progress + '%';
-      
+
       // Send step change event
       sendEvent('step_change', {
         step: currentStep,
@@ -578,17 +765,147 @@
 
       // Auto-play video when step 3 is reached
       if (step === 3) {
+        // Show debug buttons immediately on step 3 (in case autoplay fails)
+        const debugPlayBtn = document.getElementById('debugPlayButton');
+        if (debugPlayBtn) {
+          debugPlayBtn.style.display = 'inline-block';
+          console.log("[DEBUG] Debug play button made visible on step 3");
+        }
+        const debugSkipBtn = document.getElementById('debugSkipButton');
+        if (debugSkipBtn) {
+          debugSkipBtn.style.display = 'inline-block';
+          console.log("[DEBUG] Debug skip button made visible on step 3");
+        }
+
+        // Wait a bit for the step to be visible
         setTimeout(function () {
           const video = document.getElementById('attentionVideo');
           if (video) {
-            video.play().catch(function (error) {
-              console.error("Video autoplay failed:", error);
-              // Try to play on user interaction
-              document.addEventListener('click', function playVideo() {
-                video.play();
-                document.removeEventListener('click', playVideo);
-              }, { once: true });
-            });
+            console.log("[DEBUG] Attempting to autoplay video. ReadyState:", video.readyState, "Paused:", video.paused);
+
+            // Ensure video is loaded
+            if (video.readyState < 2) {
+              console.log("[DEBUG] Video not ready, calling load()");
+              video.load();
+            }
+
+            // Try to play immediately
+            const playPromise = video.play();
+
+            if (playPromise !== undefined) {
+              playPromise.then(function () {
+                // Video started playing
+                console.log("[DEBUG] Video play() promise resolved. Paused:", video.paused);
+                // Check if actually playing after a short delay
+                setTimeout(function () {
+                  if (video.paused) {
+                    console.error("[DEBUG] Video play() resolved but video is still paused!");
+                    const debugBtn = document.getElementById('debugPlayButton');
+                    if (debugBtn) {
+                      debugBtn.style.display = 'inline-block';
+                    }
+                  } else {
+                    console.log("[DEBUG] Video is actually playing, hiding play button (keeping skip button visible)");
+                    const debugPlayBtn = document.getElementById('debugPlayButton');
+                    if (debugPlayBtn) {
+                      debugPlayBtn.style.display = 'none';
+                    }
+                    // Keep skip button visible for debugging
+                  }
+                }, 500);
+              }).catch(function (error) {
+                console.error("[DEBUG] Video autoplay failed:", error, error.name, error.message);
+                // Show debug play button if autoplay fails (skip button should already be visible)
+                const debugPlayBtn = document.getElementById('debugPlayButton');
+                if (debugPlayBtn) {
+                  debugPlayBtn.style.display = 'inline-block';
+                }
+                // Skip button should already be visible from step 3 initialization
+
+                // Send error event
+                sendEvent('video_error', {
+                  error: 'Video autoplay failed',
+                  error_name: error.name,
+                  error_message: error.message,
+                  error_details: error.toString(),
+                  timestamp: Date.now()
+                });
+
+                // Try multiple fallback strategies
+
+                // Strategy 1: Wait for video to be ready
+                video.addEventListener('loadeddata', function () {
+                  console.log("[DEBUG] Video loadeddata event, trying to play");
+                  video.play().then(function () {
+                    console.log("[DEBUG] Video play after load succeeded");
+                    const debugPlayBtn = document.getElementById('debugPlayButton');
+                    if (debugPlayBtn) {
+                      debugPlayBtn.style.display = 'none';
+                    }
+                    // Keep skip button visible for debugging
+                  }).catch(function (err) {
+                    console.error("[DEBUG] Video play after load failed:", err);
+                    // Show debug buttons
+                    const debugPlayBtn = document.getElementById('debugPlayButton');
+                    if (debugPlayBtn) {
+                      debugPlayBtn.style.display = 'inline-block';
+                    }
+                    const debugSkipBtn = document.getElementById('debugSkipButton');
+                    if (debugSkipBtn) {
+                      debugSkipBtn.style.display = 'inline-block';
+                    }
+                  });
+                }, { once: true });
+
+                // Strategy 2: Try on user interaction (click anywhere)
+                const playOnInteraction = function () {
+                  console.log("[DEBUG] User interaction detected, trying to play video");
+                  video.play().then(function () {
+                    console.log("[DEBUG] Video play on interaction succeeded");
+                    document.removeEventListener('click', playOnInteraction);
+                    document.removeEventListener('touchstart', playOnInteraction);
+                    // Hide play button if successful, keep skip button visible
+                    const debugPlayBtn = document.getElementById('debugPlayButton');
+                    if (debugPlayBtn) {
+                      debugPlayBtn.style.display = 'none';
+                    }
+                    // Keep skip button visible for debugging
+                  }).catch(function (err) {
+                    console.error("[DEBUG] Video play on interaction failed:", err);
+                  });
+                };
+                document.addEventListener('click', playOnInteraction, { once: true });
+                document.addEventListener('touchstart', playOnInteraction, { once: true });
+
+                // Strategy 3: Force play after a delay
+                setTimeout(function () {
+                  console.log("[DEBUG] Attempting forced play after delay");
+                  video.play().catch(function (err) {
+                    console.error("[DEBUG] Video forced play failed:", err);
+                    // Send error event
+                    sendEvent('video_error', {
+                      error: 'Video failed to play after multiple attempts',
+                      error_details: err.toString(),
+                      timestamp: Date.now()
+                    });
+                    // Show debug button
+                    const debugBtn = document.getElementById('debugPlayButton');
+                    if (debugBtn) {
+                      debugBtn.style.display = 'inline-block';
+                    }
+                  });
+                }, 1000);
+              });
+            } else {
+              console.error("[DEBUG] video.play() returned undefined");
+              const debugPlayBtn = document.getElementById('debugPlayButton');
+              if (debugPlayBtn) {
+                debugPlayBtn.style.display = 'inline-block';
+              }
+              // Skip button should already be visible from step 3 initialization
+            }
+          } else {
+            console.error("[DEBUG] Video element not found!");
           }
         }, 500);
       }
@@ -625,4 +942,3 @@
 </body>
 
 </html>
-

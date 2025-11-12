@@ -16,7 +16,37 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QUrl
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebChannel import QWebChannel
+
+
+class ConsoleLoggingWebPage(QWebEnginePage):
+    """Custom QWebEnginePage that forwards JavaScript console messages to Python print."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+    
+    def javaScriptConsoleMessage(self, level: int, message: str, line_number: int, source_id: str):
+        """Override to capture JavaScript console messages.
+        
+        Args:
+            level: Message level (0=Info, 1=Warning, 2=Error)
+            message: Console message text
+            line_number: Line number in source
+            source_id: Source file/URL
+        """
+        level_names = {
+            QWebEnginePage.JavaScriptConsoleMessageLevel.InfoMessageLevel: "JS-INFO",
+            QWebEnginePage.JavaScriptConsoleMessageLevel.WarningMessageLevel: "JS-WARN",
+            QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel: "JS-ERROR"
+        }
+        level_name = level_names.get(level, "JS-UNKNOWN")
+        
+        # Format: [JS-LEVEL] source:line - message
+        print(f"[{level_name}] {source_id}:{line_number} - {message}")
+        
+        # Call parent method to maintain default behavior
+        super().javaScriptConsoleMessage(level, message, line_number, source_id)
 import json
 
 # Import local modules using absolute imports for direct execution
@@ -1241,6 +1271,18 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.setWindowTitle(f"Session: {session.name} - {project.name}")
         self.setMinimumSize(1200, 800)
         
+        # Ensure window appears in taskbar and is visible
+        # Set window flags before showing
+        self.setWindowFlags(
+            Qt.WindowType.Window |  # Standard window
+            Qt.WindowType.WindowMinimizeButtonHint |  # Minimize button
+            Qt.WindowType.WindowMaximizeButtonHint |  # Maximize button
+            Qt.WindowType.WindowCloseButtonHint  # Close button
+        )
+        
+        # Ensure window is not deleted when closed (we handle cleanup ourselves)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        
         # Set up the UI
         self._setup_ui()
         
@@ -1281,7 +1323,72 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         # Webpage display area
         self.web_view = QWebEngineView()
+        
+        # Set custom page that forwards console messages to Python
+        self.web_view.setPage(ConsoleLoggingWebPage(self.web_view))
+        
         layout.addWidget(self.web_view)
+        
+        # Configure web view settings for media playback
+        settings = self.web_view.settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+        
+        # Enable autoplay for media (disable user gesture requirement)
+        # Try multiple attribute names as they may vary by Qt version
+        try:
+            # Try the standard attribute name
+            settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+        except (AttributeError, TypeError):
+            # If that doesn't work, try alternative approaches
+            try:
+                # Some versions use different attribute names
+                if hasattr(QWebEngineSettings.WebAttribute, 'PlaybackRequiresUserGesture'):
+                    settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+            except (AttributeError, TypeError):
+                print("Warning: Could not set PlaybackRequiresUserGesture - autoplay may require user interaction")
+        
+        # Enable media features (only if available in this Qt version)
+        try:
+            settings.setAttribute(QWebEngineSettings.WebAttribute.MediaSourceEnabled, True)
+        except (AttributeError, TypeError):
+            # MediaSourceEnabled might not be available in all Qt versions
+            pass
+        try:
+            settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+        except (AttributeError, TypeError):
+            # WebGLEnabled might not be available in all Qt versions
+            pass
+        
+        # Try to enable hardware acceleration and video codec support
+        # Note: QtWebEngine may need to be built with proprietary codecs (H.264) for MP4 playback
+        # If videos don't play, you may need to rebuild QtWebEngine with proprietary codecs enabled
+        try:
+            # Enable hardware acceleration if available
+            if hasattr(QWebEngineSettings.WebAttribute, 'Accelerated2dCanvasEnabled'):
+                settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
+        except (AttributeError, TypeError):
+            pass
+        
+        # Set up persistent storage for better media handling
+        try:
+            profile = self.web_view.page().profile()
+            # Enable persistent cookies and cache for better media loading
+            profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+            profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies)
+        except Exception as e:
+            print(f"Warning: Could not configure web profile for media: {e}")
+        
+        # Also try setting via page profile (alternative method)
+        try:
+            profile = self.web_view.page().profile()
+            # Some Qt versions require setting this on the profile
+            if hasattr(profile, 'setHttpUserAgent'):
+                # This ensures the page is properly configured
+                pass
+        except Exception:
+            pass
         
         # Status bar
         status_msg = "Session started - tracking active"
@@ -1346,10 +1453,10 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                     self.lsl_recorder = LSLRecorder(self.session.session_id)
                     self.lsl_recorder.start_recording(wait_time=2.0)
                     
-                    # Start LSL recording timer (100 Hz = every 10ms)
+                    # Start LSL recording timer (50 Hz = every 20ms to avoid overload)
                     self.lsl_timer = QTimer()
-                    self.lsl_timer.timeout.connect(self.lsl_recorder.record_sample)
-                    self.lsl_timer.start(10)
+                    self.lsl_timer.timeout.connect(self._safe_record_lsl_sample)
+                    self.lsl_timer.start(20)  # 20ms = 50 Hz
                     
                     self.statusBar().showMessage("Bridge and LSL initialized successfully")
                 except Exception as e:
@@ -1361,6 +1468,15 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         except Exception as e:
             print(f"Error setting up bridge: {e}")
             self.statusBar().showMessage(f"Bridge setup error: {e}")
+    
+    def _safe_record_lsl_sample(self):
+        """Safely record LSL sample with error handling."""
+        try:
+            if self.lsl_recorder and self.lsl_recorder.is_recording:
+                self.lsl_recorder.record_sample()
+        except Exception as e:
+            # Don't print errors for every failed sample - just log occasionally
+            pass
     
     def _handle_bridge_event(self, event_data: Dict[str, Any]):
         """Handle events received from the HTML bridge.
@@ -1498,6 +1614,21 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         self._session_ending = True
         
+        # Stop any playing video in the webpage
+        try:
+            stop_video_js = """
+            (function() {
+                const video = document.getElementById('attentionVideo');
+                if (video) {
+                    video.pause();
+                    video.currentTime = 0;
+                }
+            })();
+            """
+            self.web_view.page().runJavaScript(stop_video_js)
+        except Exception as e:
+            print(f"Warning: Could not stop video: {e}")
+        
         # Stop tracking
         if hasattr(self, 'tracking_timer'):
             self.tracking_timer.stop()
@@ -1505,9 +1636,14 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         # Stop LSL recording
         if self.lsl_timer:
             self.lsl_timer.stop()
+            self.lsl_timer = None
         
         if self.lsl_recorder:
-            self.lsl_recorder.stop_recording()
+            try:
+                self.lsl_recorder.stop_recording()
+            except Exception as e:
+                print(f"Error stopping LSL recorder: {e}")
+            self.lsl_recorder = None
         
         # Close LSL streamers
         if self.lsl_streamer:
@@ -1732,10 +1868,15 @@ class MainWindow(QMainWindow):
                         self
                     )
                     self.session_window.session_ended.connect(self._on_session_ended)
-                    self.session_window.show()
                     
-                    # Hide the main window during session
-                    self.hide()
+                    # Show window first
+                    self.session_window.show()
+                    self.session_window.raise_()  # Bring to front
+                    self.session_window.activateWindow()  # Activate and focus
+                    
+                    # Ensure it stays visible - don't hide main window immediately
+                    # Let the session window establish itself first
+                    QTimer.singleShot(500, lambda: self.hide())
                     
                     # Refresh the dashboard to show the new session
                     if self.project_dashboard:

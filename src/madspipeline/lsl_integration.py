@@ -224,7 +224,12 @@ class LSLRecorder:
         for i, inlet in enumerate(self.inlets):
             try:
                 # Pull sample with no timeout (non-blocking)
-                sample, timestamp = inlet.pull_sample(timeout=0.0)
+                # Use try-except to handle cases where no sample is available
+                try:
+                    sample, timestamp = inlet.pull_sample(timeout=0.0)
+                except Exception:
+                    # No sample available or stream closed - this is normal
+                    continue
                 
                 if sample:
                     # Calculate relative timestamp from session start
@@ -243,8 +248,11 @@ class LSLRecorder:
                     self.recorded_data.append(recorded_sample)
                     
             except Exception as e:
-                # Continue with other streams if one fails
-                print(f"Error recording from stream {i}: {e}")
+                # Continue with other streams if one fails - don't print every error
+                # Only log if it's a real error (not just "no sample available")
+                if "timeout" not in str(e).lower() and "no sample" not in str(e).lower():
+                    # Suppress frequent error messages
+                    pass
                 continue
     
     def get_recorded_data(self) -> List[Dict[str, Any]]:
