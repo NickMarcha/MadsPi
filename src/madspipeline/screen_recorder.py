@@ -17,6 +17,17 @@ except ImportError as e:
     RECORDING_AVAILABLE = False
     IMPORT_ERROR = str(e)
 
+# Windows-specific imports for accurate window capture
+if platform.system() == 'Windows':
+    try:
+        import ctypes
+        from ctypes import wintypes
+        WINDOWS_API_AVAILABLE = True
+    except ImportError:
+        WINDOWS_API_AVAILABLE = False
+else:
+    WINDOWS_API_AVAILABLE = False
+
 from .models import ScreenRecordingConfig
 
 
@@ -59,37 +70,28 @@ class ScreenRecorder:
         
         # Determine recording region
         if self.window:
-            # Get window frame geometry in screen coordinates
-            # frameGeometry() includes window decorations and is in screen coordinates
-            frame_geom = self.window.frameGeometry()
-            # For content area, we can use geometry() but need to convert to screen coords
-            # Actually, for recording the window content, we want the client area in screen coords
-            # Get the top-left corner in screen coordinates
-            top_left = self.window.mapToGlobal(self.window.rect().topLeft())
-            # Get window size (client area, not including frame)
-            size = self.window.size()
-            
-            # Convert to screen coordinates
-            # On Windows, we need to account for DPI scaling
-            # mss uses physical pixels, so we need to get the actual screen position
-            screen = self.window.screen()
-            if screen:
-                # Get device pixel ratio for DPI scaling
-                dpr = screen.devicePixelRatio()
-                # Get screen geometry
-                screen_geom = screen.geometry()
-                # Calculate absolute screen position
-                # mapToGlobal gives us the position relative to the screen
-                self.record_x = top_left.x()
-                self.record_y = top_left.y()
-                self.record_width = size.width()
-                self.record_height = size.height()
+            # Get window geometry - we want to record the entire window including frame
+            # On Windows, we'll use Windows API to get accurate physical pixel coordinates
+            if platform.system() == 'Windows' and WINDOWS_API_AVAILABLE:
+                # Use Windows API to get window rect in physical pixels
+                try:
+                    hwnd = int(self.window.winId())
+                    rect = wintypes.RECT()
+                    # GetWindowRect returns coordinates in physical pixels
+                    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                    self.record_x = rect.left
+                    self.record_y = rect.top
+                    self.record_width = rect.right - rect.left
+                    self.record_height = rect.bottom - rect.top
+                    self.dpr = 1.0  # Windows API already returns physical pixels
+                    print(f"[ScreenRecorder] Window rect from Windows API: {self.record_x}, {self.record_y}, {self.record_width}x{self.record_height}")
+                except Exception as e:
+                    print(f"[ScreenRecorder] Failed to get window rect from Windows API: {e}, falling back to Qt")
+                    # Fallback to Qt method
+                    self._init_window_geometry_qt()
             else:
-                # Fallback: use frame geometry
-                self.record_x = frame_geom.x()
-                self.record_y = frame_geom.y()
-                self.record_width = frame_geom.width()
-                self.record_height = frame_geom.height()
+                # Use Qt geometry (may have DPI scaling issues on Windows)
+                self._init_window_geometry_qt()
         else:
             # Full screen
             with mss.mss() as sct:
@@ -98,13 +100,58 @@ class ScreenRecorder:
                 self.record_y = monitor['top']
                 self.record_width = monitor['width']
                 self.record_height = monitor['height']
+                self.dpr = 1.0
         
         # Apply resolution override if specified (scales the output)
-        if config.resolution:
-            self.output_width, self.output_height = config.resolution
+        if self.config.resolution:
+            self.output_width, self.output_height = self.config.resolution
         else:
+            # Use captured dimensions, but ensure they're even (required by most codecs)
             self.output_width = self.record_width
             self.output_height = self.record_height
+        
+        # Ensure output dimensions are even (required by most video codecs like H.264)
+        # Many codecs require dimensions to be divisible by 2 (some require 4, 8, or 16)
+        # We'll make them divisible by 2 at minimum
+        if self.output_width % 2 != 0:
+            self.output_width += 1
+        if self.output_height % 2 != 0:
+            self.output_height += 1
+    
+    def _init_window_geometry_qt(self):
+        """Initialize window geometry using Qt methods (fallback)."""
+        # Get window geometry - we want to record the entire window including frame
+        # frameGeometry() includes window decorations and is in screen coordinates (logical pixels)
+        frame_geom = self.window.frameGeometry()
+        
+        # Get the screen that contains this window
+        screen = self.window.screen()
+        if screen:
+            # Get device pixel ratio for DPI scaling
+            # On Windows with DPI scaling, Qt uses logical pixels but mss needs physical pixels
+            dpr = screen.devicePixelRatio()
+            
+            # Convert Qt logical pixels to physical pixels for mss
+            # frameGeometry() returns logical pixels, but we need physical pixels
+            logical_x = frame_geom.x()
+            logical_y = frame_geom.y()
+            logical_width = frame_geom.width()
+            logical_height = frame_geom.height()
+            
+            # Store logical coordinates - we'll convert in capture_loop where we have mss monitor info
+            self.record_x = logical_x
+            self.record_y = logical_y
+            self.record_width = logical_width
+            self.record_height = logical_height
+            self.dpr = dpr
+            print(f"[ScreenRecorder] Window geometry from Qt: {self.record_x}, {self.record_y}, {self.record_width}x{self.record_height} (DPR: {self.dpr})")
+        else:
+            # Fallback: use frame geometry without DPI scaling
+            self.record_x = frame_geom.x()
+            self.record_y = frame_geom.y()
+            self.record_width = frame_geom.width()
+            self.record_height = frame_geom.height()
+            self.dpr = 1.0
     
     def start_recording(self):
         """Start screen recording."""
@@ -175,14 +222,8 @@ class ScreenRecorder:
         with mss.mss() as sct:
             # Determine capture region
             if self.window:
-                # Update window geometry in case it moved/resized
-                geometry = self.window.geometry()
-                capture_region = {
-                    'top': geometry.y(),
-                    'left': geometry.x(),
-                    'width': geometry.width(),
-                    'height': geometry.height()
-                }
+                # Will be updated each frame
+                capture_region = None
             else:
                 # Full screen - use primary monitor
                 monitor = sct.monitors[1]
@@ -201,79 +242,156 @@ class ScreenRecorder:
                     try:
                         # Update window geometry if recording window
                         if self.window:
-                            # Get current window position and size in screen coordinates
-                            top_left = self.window.mapToGlobal(self.window.rect().topLeft())
-                            size = self.window.size()
+                            # Get all monitors from mss (in physical pixels)
+                            monitors = sct.monitors
+                            capture_region = None
                             
-                            # Get the screen that contains this window
-                            screen = self.window.screen()
-                            if screen:
-                                # Get all monitors from mss
-                                monitors = sct.monitors
+                            # Check if we're using Windows API (coordinates already in physical pixels)
+                            if platform.system() == 'Windows' and WINDOWS_API_AVAILABLE and self.dpr == 1.0:
+                                # Try to use Windows API for accurate coordinates
+                                try:
+                                    hwnd = int(self.window.winId())
+                                    rect = wintypes.RECT()
+                                    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                                    window_x = rect.left
+                                    window_y = rect.top
+                                    window_width = rect.right - rect.left
+                                    window_height = rect.bottom - rect.top
+                                    
+                                    # Find which monitor contains the window center
+                                    window_center_x = window_x + window_width // 2
+                                    window_center_y = window_y + window_height // 2
+                                    
+                                    target_monitor = None
+                                    for i in range(1, len(monitors)):
+                                        mon = monitors[i]
+                                        if (mon['left'] <= window_center_x <= mon['left'] + mon['width'] and
+                                            mon['top'] <= window_center_y <= mon['top'] + mon['height']):
+                                            target_monitor = mon
+                                            break
+                                    
+                                    if target_monitor:
+                                        # Calculate position relative to monitor (already in physical pixels)
+                                        capture_region = {
+                                            'top': window_y - target_monitor['top'],
+                                            'left': window_x - target_monitor['left'],
+                                            'width': window_width,
+                                            'height': window_height
+                                        }
+                                        
+                                        # Ensure capture region is within monitor bounds
+                                        capture_region['top'] = max(0, capture_region['top'])
+                                        capture_region['left'] = max(0, capture_region['left'])
+                                        capture_region['width'] = min(capture_region['width'], target_monitor['width'] - capture_region['left'])
+                                        capture_region['height'] = min(capture_region['height'], target_monitor['height'] - capture_region['top'])
+                                    else:
+                                        # Fallback: use primary monitor
+                                        primary_monitor = monitors[1]
+                                        capture_region = {
+                                            'top': max(0, window_y - primary_monitor['top']),
+                                            'left': max(0, window_x - primary_monitor['left']),
+                                            'width': window_width,
+                                            'height': window_height
+                                        }
+                                except Exception:
+                                    # Fallback to Qt method if Windows API fails
+                                    capture_region = None
+                            
+                            # If Windows API failed or not available, use Qt method with DPI conversion
+                            if capture_region is None:
+                                # Get current window frame geometry (includes decorations)
+                                # This returns logical pixels on Windows with DPI scaling
+                                frame_geom = self.window.frameGeometry()
+                                logical_x = frame_geom.x()
+                                logical_y = frame_geom.y()
+                                logical_width = frame_geom.width()
+                                logical_height = frame_geom.height()
                                 
-                                # Find which monitor contains the window center
-                                window_center_x = top_left.x() + size.width() // 2
-                                window_center_y = top_left.y() + size.height() // 2
+                                # Convert Qt logical pixels to physical pixels
+                                # DPR tells us the scaling factor (e.g., 1.5 for 150% DPI scaling)
+                                physical_width = int(logical_width * self.dpr)
+                                physical_height = int(logical_height * self.dpr)
                                 
-                                # Use the monitor that contains the window center
-                                # Monitor 0 is all monitors combined, 1+ are individual monitors
+                                # Find which monitor contains the window center (in logical pixels)
+                                window_center_x = logical_x + logical_width // 2
+                                window_center_y = logical_y + logical_height // 2
+                                
+                                # Find the target monitor by checking which monitor contains the window center
                                 target_monitor = None
                                 for i in range(1, len(monitors)):
                                     mon = monitors[i]
-                                    if (mon['left'] <= window_center_x <= mon['left'] + mon['width'] and
-                                        mon['top'] <= window_center_y <= mon['top'] + mon['height']):
+                                    # Convert monitor bounds to logical pixels for comparison
+                                    mon_logical_left = int(mon['left'] / self.dpr)
+                                    mon_logical_top = int(mon['top'] / self.dpr)
+                                    mon_logical_width = int(mon['width'] / self.dpr)
+                                    mon_logical_height = int(mon['height'] / self.dpr)
+                                    
+                                    if (mon_logical_left <= window_center_x <= mon_logical_left + mon_logical_width and
+                                        mon_logical_top <= window_center_y <= mon_logical_top + mon_logical_height):
                                         target_monitor = mon
                                         break
                                 
-                                # If window is on a specific monitor, use that monitor's coordinate system
+                                # If we found a target monitor, use it
                                 if target_monitor:
-                                    # Convert window position relative to the monitor
-                                    # mss coordinates are relative to the monitor, not the entire screen
+                                    # Convert window position to physical pixels
+                                    physical_x = int(logical_x * self.dpr)
+                                    physical_y = int(logical_y * self.dpr)
+                                    
+                                    # Calculate position relative to monitor (in physical pixels)
                                     capture_region = {
-                                        'top': top_left.y() - target_monitor['top'],
-                                        'left': top_left.x() - target_monitor['left'],
-                                        'width': size.width(),
-                                        'height': size.height()
+                                        'top': physical_y - target_monitor['top'],
+                                        'left': physical_x - target_monitor['left'],
+                                        'width': physical_width,
+                                        'height': physical_height
                                     }
+                                    
+                                    # Ensure capture region is within monitor bounds
+                                    capture_region['top'] = max(0, capture_region['top'])
+                                    capture_region['left'] = max(0, capture_region['left'])
+                                    capture_region['width'] = min(capture_region['width'], target_monitor['width'] - capture_region['left'])
+                                    capture_region['height'] = min(capture_region['height'], target_monitor['height'] - capture_region['top'])
                                 else:
-                                    # Fallback: use primary monitor coordinates
+                                    # Fallback: use primary monitor
+                                    primary_monitor = monitors[1]
+                                    physical_x = int(logical_x * self.dpr)
+                                    physical_y = int(logical_y * self.dpr)
+                                    
                                     capture_region = {
-                                        'top': top_left.y(),
-                                        'left': top_left.x(),
-                                        'width': size.width(),
-                                        'height': size.height()
+                                        'top': max(0, physical_y - primary_monitor['top']),
+                                        'left': max(0, physical_x - primary_monitor['left']),
+                                        'width': physical_width,
+                                        'height': physical_height
                                     }
-                            else:
-                                # Fallback: use geometry directly
-                                geometry = self.window.geometry()
-                                capture_region = {
-                                    'top': geometry.y(),
-                                    'left': geometry.x(),
-                                    'width': geometry.width(),
-                                    'height': geometry.height()
-                                }
                         
-                        # Capture screen region
-                        screenshot = sct.grab(capture_region)
-                        
-                        # Convert to numpy array
-                        img = np.array(screenshot)
-                        
-                        # Convert BGRA to BGR (opencv uses BGR)
-                        img_bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                        
-                        # Resize if output resolution differs from capture resolution
-                        if self.output_width != capture_region['width'] or self.output_height != capture_region['height']:
-                            img_bgr = cv2.resize(img_bgr, (self.output_width, self.output_height))
-                        
-                        # Write frame to video
-                        if self.video_writer and self.video_writer.isOpened():
-                            self.video_writer.write(img_bgr)
+                        # Capture screen region (must be valid)
+                        if capture_region and capture_region['width'] > 0 and capture_region['height'] > 0:
+                            screenshot = sct.grab(capture_region)
+                            
+                            # Convert to numpy array
+                            img = np.array(screenshot)
+                            
+                            # Convert BGRA to BGR (opencv uses BGR)
+                            img_bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                            
+                            # Get actual captured dimensions
+                            captured_height, captured_width = img_bgr.shape[:2]
+                            
+                            # Resize if output resolution differs from capture resolution
+                            if self.output_width != captured_width or self.output_height != captured_height:
+                                img_bgr = cv2.resize(img_bgr, (self.output_width, self.output_height), interpolation=cv2.INTER_LINEAR)
+                            
+                            # Write frame to video
+                            if self.video_writer and self.video_writer.isOpened():
+                                self.video_writer.write(img_bgr)
+                        else:
+                            print(f"Warning: Invalid capture region: {capture_region}")
                         
                         last_capture_time = current_time
                         
                     except Exception as e:
                         print(f"Error capturing frame: {e}")
+                        import traceback
+                        traceback.print_exc()
                         # Continue trying to capture
                 
                 # Small sleep to avoid busy waiting

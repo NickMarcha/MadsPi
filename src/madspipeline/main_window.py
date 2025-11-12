@@ -2745,10 +2745,37 @@ class SessionReviewWindow(QMainWindow):
                 self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
                 ret, frame = self.video_cap.read()
                 
-                if ret:
+                if ret and frame is not None:
+                    # Get frame dimensions
+                    h, w = frame.shape[:2]
+                    
+                    # Handle odd dimensions that can cause swscaler errors
+                    # Some codecs require even dimensions, so if the video has odd dimensions,
+                    # we'll crop or pad to make them even
+                    display_w = w
+                    display_h = h
+                    crop_x = 0
+                    crop_y = 0
+                    
+                    # If dimensions are odd, crop by 1 pixel (better than padding)
+                    if w % 2 != 0:
+                        display_w = w - 1
+                    if h % 2 != 0:
+                        display_h = h - 1
+                    
+                    # Crop frame if needed
+                    if display_w != w or display_h != h:
+                        frame = frame[crop_y:crop_y+display_h, crop_x:crop_x+display_w]
+                        h, w = frame.shape[:2]
+                    
+                    # Ensure we have valid dimensions
+                    if w <= 0 or h <= 0:
+                        print(f"[SessionReview] Invalid video frame dimensions: {w}x{h}")
+                        return
+                    
                     # Convert BGR to RGB
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    h, w, ch = frame_rgb.shape
+                    ch = frame_rgb.shape[2] if len(frame_rgb.shape) > 2 else 1
                     bytes_per_line = ch * w
                     
                     # Store original video dimensions (first frame)
@@ -2765,6 +2792,10 @@ class SessionReviewWindow(QMainWindow):
                     view_size = self.video_view.size()
                     view_width = float(view_size.width())
                     view_height = float(view_size.height())
+                    
+                    # Skip if view is too small
+                    if view_width <= 0 or view_height <= 0:
+                        return
                     
                     # Calculate scale to fit while maintaining aspect ratio
                     scale_x = view_width / w if w > 0 else 1.0
@@ -2793,9 +2824,17 @@ class SessionReviewWindow(QMainWindow):
                     
                     # Set scene rect to view size (not video size) for proper coordinate mapping
                     self.video_scene.setSceneRect(0, 0, view_width, view_height)
+                elif not ret:
+                    # Frame read failed - might be end of video or codec issue
+                    # Try to seek to a valid frame
+                    if frame_number >= self.video_frame_count:
+                        # At end of video, show last frame
+                        self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, self.video_frame_count - 1))
             except Exception as e:
-                # Silently handle errors (video might be unavailable)
-                pass
+                # Log error but don't crash - video might have issues
+                print(f"[SessionReview] Error updating video overlay: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Remove existing overlay items (mouse cursor and trail) - keep video frame
         overlay_items = []
