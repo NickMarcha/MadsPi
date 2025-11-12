@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8">
-  <title>PySide6 IPC Demo</title>
+  <title>MadsPipeline Bridge Example</title>
   <!-- Qt-provided JS -->
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <!-- Our reusable bridge -->
@@ -11,21 +11,81 @@
 </head>
 
 <body>
-  <h2>JS ↔ Python Messaging</h2>
-  <input id="input" type="text" value="Hello from JS" />
-  <button id="sendBtn">Send to Python</button>
-  <pre id="log"></pre>
+  <h2>MadsPipeline HTML Bridge Example</h2>
+  <p>This page demonstrates how to send events from HTML to Python via the bridge.</p>
+
+  <div>
+    <h3>Send Plain Message</h3>
+    <input id="input" type="text" value="Hello from JS" />
+    <button id="sendBtn">Send to Python</button>
+  </div>
+
+  <div>
+    <h3>Send Structured Events (for LSL streaming)</h3>
+    <button id="clickBtn">Send Click Event</button>
+    <button id="markerBtn">Send Marker Event</button>
+    <button id="customBtn">Send Custom Event</button>
+  </div>
+
+  <div>
+    <h3>Messages from Python:</h3>
+    <pre id="log"></pre>
+  </div>
 
   <script>
     document.addEventListener("DOMContentLoaded", function () {
+      // Initialize bridge
       setupBridge(function (msg) {
-        document.getElementById("log").innerText += "\n" + msg;
+        const log = document.getElementById("log");
+        log.innerText += "\n[Python] " + msg;
+        log.scrollTop = log.scrollHeight;
       });
 
+      // Send plain message
       document.getElementById("sendBtn").onclick = function () {
         let txt = document.getElementById("input").value;
         sendToPython(txt);
+        document.getElementById("log").innerText += "\n[JS] Sent: " + txt;
       };
+
+      // Send click event (will be streamed to LSL)
+      document.getElementById("clickBtn").onclick = function () {
+        sendEvent('click', {
+          x: 100,
+          y: 200,
+          button: 'left'
+        });
+        document.getElementById("log").innerText += "\n[JS] Sent click event";
+      };
+
+      // Send marker event (will be streamed to LSL)
+      document.getElementById("markerBtn").onclick = function () {
+        sendEvent('marker', {
+          label: 'Test Marker',
+          description: 'This is a test marker event',
+          category: 'test'
+        });
+        document.getElementById("log").innerText += "\n[JS] Sent marker event";
+      };
+
+      // Send custom event (will be streamed to LSL)
+      document.getElementById("customBtn").onclick = function () {
+        sendEvent('custom', {
+          action: 'button_click',
+          element: 'customBtn',
+          value: 'test_value'
+        });
+        document.getElementById("log").innerText += "\n[JS] Sent custom event";
+      };
+
+      // Example: Send page load event (will be queued if bridge not ready)
+      // Using setTimeout to give bridge a moment to initialize
+      setTimeout(function () {
+        sendEvent('page_load', {
+          url: window.location.href,
+          timestamp: Date.now()
+        });
+      }, 100);
     });
   </script>
 </body>

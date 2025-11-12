@@ -1,21 +1,80 @@
-// bridge.js
+// madsBridge.js - Bridge client for HTML-to-Python communication
+// This file should be included in HTML pages that need to communicate with Python
+
+// Track bridge initialization state
+window.bridgeReady = false;
+window.bridgeCallbacks = [];
+
 function setupBridge(callback) {
+  // Wait for QWebChannel to be available
+  if (typeof QWebChannel === 'undefined') {
+    console.error("QWebChannel not available. Make sure qwebchannel.js is loaded.");
+    return;
+  }
+
+  // Store callback if provided
+  if (callback) {
+    window.bridgeCallbacks.push(callback);
+  }
+
   new QWebChannel(qt.webChannelTransport, function (channel) {
     window.bridge = channel.objects.bridge;
+    window.bridgeReady = true;
 
     // Listen for signals from Python
-    bridge.messageFromJs.connect(function (msg) {
-      console.log("JS received:", msg);
-      if (callback) callback(msg);
+    window.bridge.messageFromPython.connect(function (msg) {
+      console.log("JS received from Python:", msg);
+      // Call all registered callbacks
+      window.bridgeCallbacks.forEach(function(cb) {
+        cb(msg);
+      });
     });
+
+    console.log("Bridge initialized successfully");
+    
+    // Execute any queued bridge operations
+    if (window.bridgeQueue) {
+      window.bridgeQueue.forEach(function(operation) {
+        operation();
+      });
+      window.bridgeQueue = [];
+    }
   });
 }
 
 // Utility to send messages to Python
 function sendToPython(message) {
-  if (window.bridge) {
-    bridge.receiveMessage(message);
+  if (window.bridge && window.bridgeReady) {
+    window.bridge.receiveMessage(message);
   } else {
-    console.error("Bridge not ready yet.");
+    // Queue the message if bridge isn't ready yet
+    if (!window.bridgeQueue) {
+      window.bridgeQueue = [];
+    }
+    window.bridgeQueue.push(function() {
+      if (window.bridge) {
+        window.bridge.receiveMessage(message);
+      }
+    });
+    console.warn("Bridge not ready yet. Message queued. Call setupBridge() first.");
   }
 }
+
+// Utility to send structured events to Python (for LSL streaming)
+function sendEvent(type, data) {
+  const event = {
+    type: type,
+    data: data || {},
+    timestamp: Date.now()
+  };
+
+  sendToPython(JSON.stringify(event));
+}
+
+// Example event types:
+// - 'click': Mouse click events
+// - 'marker': Custom event markers
+// - 'custom': Custom events
+// - 'page_load': Page load events
+// - 'scroll': Scroll events
+// - etc.

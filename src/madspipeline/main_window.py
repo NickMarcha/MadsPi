@@ -16,11 +16,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QUrl
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebChannel import QWebChannel
 import json
 
 # Import local modules using absolute imports for direct execution
 from .project_manager import ProjectManager
 from .models import Project, Session, ProjectType
+from .madsBridge import Bridge
+from .lsl_integration import LSLBridgeStreamer, LSLMouseTrackingStreamer, LSLRecorder, LSL_AVAILABLE
 
 
 class ProjectCreationDialog(QDialog):
@@ -1224,11 +1227,25 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.session_start_time = datetime.now()
         self.tracking_data = []
         
+        # LSL integration components
+        self.bridge: Optional[Bridge] = None
+        self.channel: Optional[QWebChannel] = None
+        self.lsl_streamer: Optional[LSLBridgeStreamer] = None
+        self.lsl_mouse_streamer: Optional[LSLMouseTrackingStreamer] = None
+        self.lsl_recorder: Optional[LSLRecorder] = None
+        self.lsl_timer: Optional[QTimer] = None
+        
+        # Flag to prevent double execution of _end_session
+        self._session_ending = False
+        
         self.setWindowTitle(f"Session: {session.name} - {project.name}")
         self.setMinimumSize(1200, 800)
         
         # Set up the UI
         self._setup_ui()
+        
+        # Set up bridge and QWebChannel
+        self._setup_bridge()
         
         # Load the webpage
         self._load_webpage()
@@ -1267,7 +1284,12 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         layout.addWidget(self.web_view)
         
         # Status bar
-        self.statusBar().showMessage("Session started - tracking active")
+        status_msg = "Session started - tracking active"
+        if LSL_AVAILABLE:
+            status_msg += " - LSL enabled"
+        else:
+            status_msg += " - LSL unavailable"
+        self.statusBar().showMessage(status_msg)
     
     def _load_webpage(self):
         """Load the webpage based on project configuration."""
@@ -1295,6 +1317,79 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             self.web_view.setHtml(error_html)
             self.statusBar().showMessage("No webpage configured")
     
+    def _setup_bridge(self):
+        """Set up QWebChannel bridge for HTML-to-Python communication."""
+        try:
+            # Create bridge instance
+            self.bridge = Bridge()
+            
+            # Create QWebChannel and register bridge
+            self.channel = QWebChannel()
+            self.channel.registerObject("bridge", self.bridge)
+            
+            # Set channel on web view
+            self.web_view.page().setWebChannel(self.channel)
+            
+            # Connect bridge event signal to LSL streaming
+            self.bridge.event_received.connect(self._handle_bridge_event)
+            
+            # Set up LSL streaming and recording
+            if LSL_AVAILABLE:
+                try:
+                    # Create LSL streamer for bridge events
+                    self.lsl_streamer = LSLBridgeStreamer(self.session.session_id)
+                    
+                    # Create LSL streamer for mouse tracking
+                    self.lsl_mouse_streamer = LSLMouseTrackingStreamer(self.session.session_id)
+                    
+                    # Create LSL recorder for all streams (will capture bridge events, mouse tracking, and any other devices)
+                    self.lsl_recorder = LSLRecorder(self.session.session_id)
+                    self.lsl_recorder.start_recording(wait_time=2.0)
+                    
+                    # Start LSL recording timer (100 Hz = every 10ms)
+                    self.lsl_timer = QTimer()
+                    self.lsl_timer.timeout.connect(self.lsl_recorder.record_sample)
+                    self.lsl_timer.start(10)
+                    
+                    self.statusBar().showMessage("Bridge and LSL initialized successfully")
+                except Exception as e:
+                    print(f"Warning: Could not initialize LSL: {e}")
+                    self.statusBar().showMessage(f"Bridge initialized, but LSL unavailable: {e}")
+            else:
+                self.statusBar().showMessage("Bridge initialized (LSL not available)")
+                
+        except Exception as e:
+            print(f"Error setting up bridge: {e}")
+            self.statusBar().showMessage(f"Bridge setup error: {e}")
+    
+    def _handle_bridge_event(self, event_data: Dict[str, Any]):
+        """Handle events received from the HTML bridge.
+        
+        Args:
+            event_data: Event dictionary with type, data, timestamp
+        """
+        try:
+            # Add to tracking data
+            bridge_event = {
+                'timestamp': event_data.get('timestamp', datetime.now().isoformat()),
+                'event_type': 'bridge_event',
+                'bridge_event_type': event_data.get('type', 'unknown'),
+                'bridge_event_data': event_data.get('data', {}),
+                'session_id': self.session.session_id
+            }
+            self.tracking_data.append(bridge_event)
+            
+            # Stream to LSL if available
+            if self.lsl_streamer:
+                self.lsl_streamer.push_event(event_data)
+            
+            # Update status bar
+            event_type = event_data.get('type', 'unknown')
+            self.statusBar().showMessage(f"Bridge event: {event_type}", 2000)
+            
+        except Exception as e:
+            print(f"Error handling bridge event: {e}")
+    
     def _setup_tracking(self):
         """Set up tracking data collection."""
         # Start tracking timer (every 100ms = 10 FPS)
@@ -1318,6 +1413,10 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         }
         
         self.tracking_data.append(tracking_point)
+        
+        # Stream to LSL if available
+        if self.lsl_mouse_streamer:
+            self.lsl_mouse_streamer.push_tracking_data(tracking_point)
     
     def _on_mouse_press(self, event):
         """Handle mouse press events."""
@@ -1332,6 +1431,10 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         }
         
         self.tracking_data.append(tracking_point)
+        
+        # Stream to LSL if available
+        if self.lsl_mouse_streamer:
+            self.lsl_mouse_streamer.push_tracking_data(tracking_point)
         
         # Call parent's mouse press event
         super(QWebEngineView, self.web_view).mousePressEvent(event)
@@ -1350,6 +1453,10 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         self.tracking_data.append(tracking_point)
         
+        # Stream to LSL if available
+        if self.lsl_mouse_streamer:
+            self.lsl_mouse_streamer.push_tracking_data(tracking_point)
+        
         # Call parent's mouse release event
         super(QWebEngineView, self.web_view).mouseReleaseEvent(event)
     
@@ -1366,21 +1473,44 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         self.tracking_data.append(tracking_point)
         
+        # Stream to LSL if available
+        if self.lsl_mouse_streamer:
+            self.lsl_mouse_streamer.push_tracking_data(tracking_point)
+        
         # Call parent's mouse move event
         super(QWebEngineView, self.web_view).mouseMoveEvent(event)
     
     def _end_session(self):
         """End the session and save data."""
+        # Prevent double execution
+        if self._session_ending:
+            return
+        
+        self._session_ending = True
+        
         # Stop tracking
         if hasattr(self, 'tracking_timer'):
             self.tracking_timer.stop()
+        
+        # Stop LSL recording
+        if self.lsl_timer:
+            self.lsl_timer.stop()
+        
+        if self.lsl_recorder:
+            self.lsl_recorder.stop_recording()
+        
+        # Close LSL streamers
+        if self.lsl_streamer:
+            self.lsl_streamer.close()
+        if self.lsl_mouse_streamer:
+            self.lsl_mouse_streamer.close()
         
         # Calculate session duration
         session_end_time = datetime.now()
         duration = (session_end_time - self.session_start_time).total_seconds()
         self.session.duration = duration
         
-        # Save session data
+        # Save session data (including LSL data)
         self._save_session_data()
         
         # Emit session ended signal
@@ -1390,18 +1520,33 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.close()
     
     def _save_session_data(self):
-        """Save session tracking data."""
-        if not self.tracking_data:
-            return
-        
+        """Save session tracking data and LSL recorded data."""
         # Create tracking data directory
         tracking_dir = self.project.project_path / "tracking_data" / self.session.session_id
         tracking_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save tracking data
-        tracking_file = tracking_dir / "tracking_data.json"
-        with open(tracking_file, 'w', encoding='utf-8') as f:
-            json.dump(self.tracking_data, f, indent=2)
+        # Save tracking data (mouse events, bridge events, etc.)
+        if self.tracking_data:
+            tracking_file = tracking_dir / "tracking_data.json"
+            with open(tracking_file, 'w', encoding='utf-8') as f:
+                json.dump(self.tracking_data, f, indent=2)
+        
+        # Save LSL recorded data if available (this is the comprehensive record with all streams)
+        if self.lsl_recorder and self.lsl_recorder.recorded_data:
+            lsl_file = tracking_dir / "lsl_recorded_data.json"
+            # Include all tracking data in LSL file for completeness
+            # (even though most should already be in LSL streams)
+            self.lsl_recorder.save_to_file(str(lsl_file), additional_tracking_data=self.tracking_data)
+            
+            # Also add LSL data summary to tracking data
+            lsl_summary = {
+                'timestamp': datetime.now().isoformat(),
+                'event_type': 'lsl_summary',
+                'total_samples': len(self.lsl_recorder.recorded_data),
+                'streams': self.lsl_recorder.stream_info,
+                'session_id': self.session.session_id
+            }
+            self.tracking_data.append(lsl_summary)
         
         # Update session metadata
         self.session.tracking_data_path = tracking_dir
