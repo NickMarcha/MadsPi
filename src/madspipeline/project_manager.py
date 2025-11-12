@@ -107,7 +107,10 @@ class ProjectManager:
                 local_html_path=Path(config.get('local_html_path')) if config and config.get('local_html_path') else None,
                 enable_marker_api=config.get('enable_marker_api', True) if config else True,
                 fullscreen=config.get('fullscreen', True) if config else True,
-                allow_external_links=config.get('allow_external_links', False) if config else False
+                allow_external_links=config.get('allow_external_links', False) if config else False,
+                window_size=tuple(config['window_size']) if config and config.get('window_size') else None,
+                enforce_fullscreen=config.get('enforce_fullscreen', False) if config else False,
+                normalize_mouse_coordinates=config.get('normalize_mouse_coordinates', True) if config else True
             )
         
         # Create project instance

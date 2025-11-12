@@ -55,6 +55,9 @@ class EmbeddedWebpageConfig:
     enable_marker_api: bool = True
     fullscreen: bool = True
     allow_external_links: bool = False
+    window_size: Optional[tuple[int, int]] = None  # (width, height) - enforced window size for consistent data alignment
+    enforce_fullscreen: bool = False  # If True, forces fullscreen mode (overrides window_size)
+    normalize_mouse_coordinates: bool = True  # If True, mouse positions are normalized (0-1) relative to window size
 
 
 @dataclass
@@ -107,7 +110,10 @@ class Project:
                 'local_html_path': str(self.embedded_webpage_config.local_html_path) if self.embedded_webpage_config.local_html_path else None,
                 'enable_marker_api': self.embedded_webpage_config.enable_marker_api,
                 'fullscreen': self.embedded_webpage_config.fullscreen,
-                'allow_external_links': self.embedded_webpage_config.allow_external_links
+                'allow_external_links': self.embedded_webpage_config.allow_external_links,
+                'window_size': self.embedded_webpage_config.window_size,
+                'enforce_fullscreen': self.embedded_webpage_config.enforce_fullscreen,
+                'normalize_mouse_coordinates': self.embedded_webpage_config.normalize_mouse_coordinates
             }
         
         return {
@@ -168,7 +174,10 @@ class Project:
                 local_html_path=Path(config['local_html_path']) if config.get('local_html_path') else None,
                 enable_marker_api=config.get('enable_marker_api', True),
                 fullscreen=config.get('fullscreen', True),
-                allow_external_links=config.get('allow_external_links', False)
+                allow_external_links=config.get('allow_external_links', False),
+                window_size=tuple(config['window_size']) if config.get('window_size') else None,
+                enforce_fullscreen=config.get('enforce_fullscreen', False),
+                normalize_mouse_coordinates=config.get('normalize_mouse_coordinates', True)
             )
         
         return cls(

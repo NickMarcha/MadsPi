@@ -359,9 +359,37 @@ class EditProjectDialog(QDialog):
         self.marker_api_check.setChecked(True)
         self.config_layout.addRow("Enable Marker API:", self.marker_api_check)
         
-        self.fullscreen_check = QCheckBox()
-        self.fullscreen_check.setChecked(True)
-        self.config_layout.addRow("Fullscreen:", self.fullscreen_check)
+        self.enforce_fullscreen_check = QCheckBox()
+        self.enforce_fullscreen_check.setChecked(False)
+        self.enforce_fullscreen_check.toggled.connect(self._on_fullscreen_toggled)
+        self.config_layout.addRow("Enforce Fullscreen:", self.enforce_fullscreen_check)
+        
+        # Window size configuration (only enabled when not enforcing fullscreen)
+        window_size_layout = QHBoxLayout()
+        
+        self.window_width_spin = QSpinBox()
+        self.window_width_spin.setRange(100, 7680)
+        self.window_width_spin.setValue(1920)
+        self.window_width_spin.setSuffix(" px")
+        window_size_layout.addWidget(self.window_width_spin)
+        
+        window_size_layout.addWidget(QLabel("×"))
+        
+        self.window_height_spin = QSpinBox()
+        self.window_height_spin.setRange(100, 4320)
+        self.window_height_spin.setValue(1080)
+        self.window_height_spin.setSuffix(" px")
+        window_size_layout.addWidget(self.window_height_spin)
+        
+        self.window_size_label = QLabel("Window Size (Width × Height):")
+        self.config_layout.addRow(self.window_size_label, window_size_layout)
+        
+        self.normalize_coords_check = QCheckBox()
+        self.normalize_coords_check.setChecked(True)
+        self.config_layout.addRow("Normalize Mouse Coordinates:", self.normalize_coords_check)
+        
+        # Initialize state
+        self._on_fullscreen_toggled()
     
     def _add_images(self):
         """Add images to the slideshow."""
@@ -391,6 +419,13 @@ class EditProjectDialog(QDialog):
         )
         if file_path:
             self.local_html_edit.setText(file_path)
+    
+    def _on_fullscreen_toggled(self):
+        """Handle fullscreen checkbox toggle - enable/disable window size fields."""
+        enforce_fullscreen = self.enforce_fullscreen_check.isChecked()
+        self.window_width_spin.setEnabled(not enforce_fullscreen)
+        self.window_height_spin.setEnabled(not enforce_fullscreen)
+        self.window_size_label.setEnabled(not enforce_fullscreen)
     
     def _load_current_config(self):
         """Load current project configuration into UI."""
@@ -425,7 +460,13 @@ class EditProjectDialog(QDialog):
             if config.local_html_path:
                 self.local_html_edit.setText(str(config.local_html_path))
             self.marker_api_check.setChecked(config.enable_marker_api)
-            self.fullscreen_check.setChecked(config.fullscreen)
+            self.enforce_fullscreen_check.setChecked(config.enforce_fullscreen if hasattr(config, 'enforce_fullscreen') else False)
+            if config.window_size:
+                self.window_width_spin.setValue(config.window_size[0])
+                self.window_height_spin.setValue(config.window_size[1])
+            self.normalize_coords_check.setChecked(config.normalize_mouse_coordinates if hasattr(config, 'normalize_mouse_coordinates') else True)
+            # Update UI state based on fullscreen setting
+            self._on_fullscreen_toggled()
     
     def _save_project(self):
         """Save the project changes and accept dialog."""
@@ -469,11 +510,19 @@ class EditProjectDialog(QDialog):
                 'mouse_tracking': self.mouse_tracking_check.isChecked()
             })
         elif self.project_type == ProjectType.EMBEDDED_WEBPAGE:
+            # Window size: only set if not enforcing fullscreen
+            window_size = None
+            if not self.enforce_fullscreen_check.isChecked():
+                window_size = (self.window_width_spin.value(), self.window_height_spin.value())
+            
             config.update({
                 'webpage_url': self.webpage_url_edit.text() if self.webpage_url_edit.text() else None,
                 'local_html_path': self.local_html_edit.text() if self.local_html_edit.text() else None,
                 'enable_marker_api': self.marker_api_check.isChecked(),
-                'fullscreen': self.fullscreen_check.isChecked()
+                'fullscreen': True,  # Keep for backward compatibility
+                'window_size': window_size,
+                'enforce_fullscreen': self.enforce_fullscreen_check.isChecked(),
+                'normalize_mouse_coordinates': self.normalize_coords_check.isChecked()
             })
         
         return config
@@ -1285,6 +1334,12 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.setWindowTitle(f"Session: {session.name} - {project.name}")
         self.setMinimumSize(1200, 800)
         
+        # Store window size configuration for coordinate normalization
+        config = self.project.embedded_webpage_config
+        self.target_window_size = config.window_size if config else None
+        self.enforce_fullscreen = config.enforce_fullscreen if config else False
+        self.normalize_mouse_coordinates = config.normalize_mouse_coordinates if config else True
+        
         # Ensure window appears in taskbar and is visible
         # Set window flags before showing
         self.setWindowFlags(
@@ -1299,6 +1354,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         # Set up the UI
         self._setup_ui()
+        
+        # Apply window size/fullscreen configuration after UI is set up
+        self._apply_window_config()
         
         # Set up bridge and QWebChannel
         self._setup_bridge()
@@ -1414,6 +1472,69 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         else:
             status_msg += " - LSL unavailable"
         self.statusBar().showMessage(status_msg)
+    
+    def _apply_window_config(self):
+        """Apply window size and fullscreen configuration."""
+        config = self.project.embedded_webpage_config
+        if not config:
+            return
+        
+        # Enforce fullscreen if configured (takes priority over window_size)
+        if config.enforce_fullscreen:
+            self.showFullScreen()
+            print(f"[SessionWindow] Enforced fullscreen mode")
+        elif config.window_size:
+            # Set fixed window size
+            width, height = config.window_size
+            self.setFixedSize(width, height)
+            # Center window on screen
+            screen = self.screen().availableGeometry()
+            x = (screen.width() - width) // 2
+            y = (screen.height() - height) // 2
+            self.move(x, y)
+            print(f"[SessionWindow] Enforced window size: {width}x{height}")
+        else:
+            # Default: allow resizing but set minimum size
+            self.setMinimumSize(1200, 800)
+            print(f"[SessionWindow] Using default window size (resizable)")
+    
+    def _normalize_mouse_coordinates(self, x: float, y: float) -> tuple:
+        """Normalize mouse coordinates relative to window size.
+        
+        Args:
+            x, y: Absolute pixel coordinates relative to web_view
+            
+        Returns:
+            Normalized coordinates (0-1) if normalize_mouse_coordinates is True,
+            otherwise returns absolute coordinates.
+            If target_window_size is set, normalizes relative to that size.
+            Otherwise, normalizes relative to current window size.
+        """
+        if not self.normalize_mouse_coordinates:
+            return (float(x), float(y))
+        
+        # Determine reference size for normalization
+        if self.target_window_size:
+            # Use configured window size
+            ref_width, ref_height = self.target_window_size
+        else:
+            # Use current window size as fallback
+            geometry = self.web_view.geometry()
+            ref_width = float(geometry.width())
+            ref_height = float(geometry.height())
+        
+        # Normalize to 0-1 range
+        if ref_width > 0 and ref_height > 0:
+            norm_x = float(x) / ref_width
+            norm_y = float(y) / ref_height
+            # Clamp to 0-1 range (in case coordinates are slightly outside bounds)
+            norm_x = max(0.0, min(1.0, norm_x))
+            norm_y = max(0.0, min(1.0, norm_y))
+            return (norm_x, norm_y)
+        else:
+            # Fallback: return absolute coordinates if size is invalid
+            print(f"[MouseTracking] Warning: Invalid window size for normalization ({ref_width}x{ref_height}), using absolute coordinates")
+            return (float(x), float(y))
     
     def _load_webpage(self):
         """Load the webpage based on project configuration."""
@@ -1589,10 +1710,15 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     def _collect_tracking_data(self):
         """Collect current tracking data."""
         cursor_pos = self.web_view.mapFromGlobal(self.web_view.cursor().pos())
+        abs_x, abs_y = cursor_pos.x(), cursor_pos.y()
+        
+        # Normalize coordinates if configured
+        norm_x, norm_y = self._normalize_mouse_coordinates(abs_x, abs_y)
         
         tracking_point = {
             'timestamp': datetime.now().isoformat(),
-            'mouse_position': (cursor_pos.x(), cursor_pos.y()),
+            'mouse_position': (norm_x, norm_y),  # Store normalized coordinates
+            'absolute_position': (abs_x, abs_y),  # Also store absolute for reference
             'session_id': self.session.session_id
         }
         
@@ -1603,10 +1729,15 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     def _on_mouse_press(self, event):
         """Handle mouse press events."""
         cursor_pos = self.web_view.mapFromGlobal(event.globalPos())
+        abs_x, abs_y = cursor_pos.x(), cursor_pos.y()
+        
+        # Normalize coordinates if configured
+        norm_x, norm_y = self._normalize_mouse_coordinates(abs_x, abs_y)
         
         tracking_point = {
             'timestamp': datetime.now().isoformat(),
-            'mouse_position': (cursor_pos.x(), cursor_pos.y()),
+            'mouse_position': (norm_x, norm_y),  # Store normalized coordinates
+            'absolute_position': (abs_x, abs_y),  # Also store absolute for reference
             'event_type': 'mouse_press',
             'button': event.button(),
             'session_id': self.session.session_id
@@ -1622,10 +1753,15 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     def _on_mouse_release(self, event):
         """Handle mouse release events."""
         cursor_pos = self.web_view.mapFromGlobal(event.globalPos())
+        abs_x, abs_y = cursor_pos.x(), cursor_pos.y()
+        
+        # Normalize coordinates if configured
+        norm_x, norm_y = self._normalize_mouse_coordinates(abs_x, abs_y)
         
         tracking_point = {
             'timestamp': datetime.now().isoformat(),
-            'mouse_position': (cursor_pos.x(), cursor_pos.y()),
+            'mouse_position': (norm_x, norm_y),  # Store normalized coordinates
+            'absolute_position': (abs_x, abs_y),  # Also store absolute for reference
             'event_type': 'mouse_release',
             'button': event.button(),
             'session_id': self.session.session_id
@@ -1641,10 +1777,15 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     def _on_mouse_move(self, event):
         """Handle mouse move events."""
         cursor_pos = self.web_view.mapFromGlobal(event.globalPos())
+        abs_x, abs_y = cursor_pos.x(), cursor_pos.y()
+        
+        # Normalize coordinates if configured
+        norm_x, norm_y = self._normalize_mouse_coordinates(abs_x, abs_y)
         
         tracking_point = {
             'timestamp': datetime.now().isoformat(),
-            'mouse_position': (cursor_pos.x(), cursor_pos.y()),
+            'mouse_position': (norm_x, norm_y),  # Store normalized coordinates
+            'absolute_position': (abs_x, abs_y),  # Also store absolute for reference
             'event_type': 'mouse_move',
             'session_id': self.session.session_id
         }
@@ -2423,14 +2564,20 @@ class SessionReviewWindow(QMainWindow):
             if stream_name == 'MadsPipeline_MouseTracking':
                 # Mouse tracking data: [x, y, event_type]
                 if isinstance(data, list) and len(data) >= 2:
-                    x = data[0] if len(data) > 0 else 0
-                    y = data[1] if len(data) > 1 else 0
+                    x = float(data[0]) if len(data) > 0 else 0.0
+                    y = float(data[1]) if len(data) > 1 else 0.0
                     event_type_val = data[2] if len(data) > 2 else 0
                     # Decode event type
                     event_type_map = {0.0: 'position', 1.0: 'press', 2.0: 'release', 3.0: 'move'}
                     event_type_str = event_type_map.get(event_type_val, f'unknown({event_type_val})')
                     self.lsl_table.setItem(i, 2, QTableWidgetItem("Mouse"))
-                    self.lsl_table.setItem(i, 3, QTableWidgetItem(f"({x:.0f}, {y:.0f}) - {event_type_str}"))
+                    # Display with precision - if values are 0-1 (normalized), show 3 decimals, otherwise show as integers
+                    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                        # Normalized coordinates (0-1 range)
+                        self.lsl_table.setItem(i, 3, QTableWidgetItem(f"({x:.3f}, {y:.3f}) - {event_type_str}"))
+                    else:
+                        # Absolute pixel coordinates
+                        self.lsl_table.setItem(i, 3, QTableWidgetItem(f"({x:.0f}, {y:.0f}) - {event_type_str}"))
                 else:
                     self.lsl_table.setItem(i, 2, QTableWidgetItem("Mouse"))
                     self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data)[:50]))
@@ -2815,7 +2962,10 @@ class MainWindow(QMainWindow):
                         local_html_path=Path(dialog.project_config.get('local_html_path')) if dialog.project_config.get('local_html_path') else None,
                         enable_marker_api=dialog.project_config.get('enable_marker_api', True),
                         fullscreen=dialog.project_config.get('fullscreen', True),
-                        allow_external_links=False
+                        allow_external_links=False,
+                        window_size=dialog.project_config.get('window_size'),
+                        enforce_fullscreen=dialog.project_config.get('enforce_fullscreen', False),
+                        normalize_mouse_coordinates=dialog.project_config.get('normalize_mouse_coordinates', True)
                     )
                 
                 # Update modified date
