@@ -1614,20 +1614,37 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         self._session_ending = True
         
-        # Stop any playing video in the webpage
+        # Stop any playing video in the webpage - use multiple strategies
         try:
+            # Strategy 1: Stop video via JavaScript (aggressive)
             stop_video_js = """
             (function() {
                 const video = document.getElementById('attentionVideo');
                 if (video) {
                     video.pause();
                     video.currentTime = 0;
+                    video.muted = true;
+                    // Remove source to completely stop playback
+                    const src = video.src;
+                    video.src = '';
+                    video.load();
                 }
             })();
             """
             self.web_view.page().runJavaScript(stop_video_js)
+            
+            # Strategy 2: Unload the webpage completely to force QtWebEngine to stop all media
+            # This is the most reliable way - unloading the page stops all media playback
+            # Use QTimer to give JavaScript a moment to execute, then unload
+            QTimer.singleShot(100, lambda: self.web_view.setUrl(QUrl("about:blank")))
+            
         except Exception as e:
             print(f"Warning: Could not stop video: {e}")
+            # Fallback: just unload the page
+            try:
+                self.web_view.setUrl(QUrl("about:blank"))
+            except:
+                pass
         
         # Stop tracking
         if hasattr(self, 'tracking_timer'):
@@ -1662,8 +1679,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         # Emit session ended signal
         self.session_ended.emit(self.session.session_id)
         
-        # Close window
-        self.close()
+        # Close window after a short delay to allow page to unload and stop media
+        # This ensures the video stops before the window closes
+        QTimer.singleShot(200, self.close)
     
     def _save_session_data(self):
         """Save session tracking data and LSL recorded data."""

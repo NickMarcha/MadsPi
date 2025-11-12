@@ -444,6 +444,7 @@
       video_watched: false,
       wrapup_questionnaire: {}
     };
+    let videoSkipped = false; // Flag to track if video was intentionally skipped
 
     // Initialize bridge
     document.addEventListener("DOMContentLoaded", function () {
@@ -518,9 +519,9 @@
           console.log("[DEBUG] Video 'waiting' event - buffering");
         });
 
-        // Prevent pause - immediately resume if paused
+        // Prevent pause - immediately resume if paused (unless video was skipped)
         video.addEventListener('pause', function () {
-          if (!video.ended) {
+          if (!video.ended && !videoSkipped) {
             video.play().catch(function (err) {
               console.error("Could not resume video:", err);
             });
@@ -606,9 +607,25 @@
               timestamp: Date.now()
             });
 
-            // Stop the video
+            // Set skip flag to prevent auto-resume
+            videoSkipped = true;
+
+            // Aggressively stop the video
             video.pause();
             video.currentTime = 0;
+            video.muted = true; // Mute to stop audio
+
+            // Remove video source to completely stop playback
+            const videoSrc = video.src;
+            video.src = '';
+            video.load(); // This will stop any buffering/loading
+
+            // Restore source after a moment (in case it's needed later, but video won't play)
+            setTimeout(function () {
+              if (video.src === '') {
+                video.src = videoSrc;
+              }
+            }, 100);
 
             // Mark video as watched and advance to next step
             sessionData.video_watched = true;
@@ -746,6 +763,9 @@
     }
 
     function goToStep(step) {
+      // Save old step to check if we're leaving step 3
+      const oldStep = currentStep;
+
       // Hide current step
       document.getElementById('step' + currentStep).classList.remove('active');
 
@@ -762,6 +782,17 @@
         step: currentStep,
         timestamp: Date.now()
       });
+
+      // Stop video if leaving step 3 (moving to step 4 or any other step)
+      if (oldStep === 3 && step !== 3) {
+        const video = document.getElementById('attentionVideo');
+        if (video) {
+          // Aggressively stop the video when leaving step 3
+          video.pause();
+          video.currentTime = 0;
+          video.muted = true;
+        }
+      }
 
       // Auto-play video when step 3 is reached
       if (step === 3) {
