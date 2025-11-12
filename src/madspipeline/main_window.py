@@ -1259,6 +1259,14 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.session_start_time = datetime.now()
         self.tracking_data = []
         
+        # Add a single session_start event at the beginning
+        session_start_event = {
+            'timestamp': self.session_start_time.isoformat(),
+            'event_type': 'session_start',
+            'session_id': self.session.session_id
+        }
+        self.tracking_data.append(session_start_event)
+        
         # LSL integration components
         self.bridge: Optional[Bridge] = None
         self.channel: Optional[QWebChannel] = None
@@ -1657,26 +1665,34 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             self.lsl_timer.stop()
             self.lsl_timer = None
         
+        # Store recorder reference before stopping (we need it for saving)
+        lsl_recorder_to_save = self.lsl_recorder
+        
         if self.lsl_recorder:
             try:
                 self.lsl_recorder.stop_recording()
             except Exception as e:
                 print(f"Error stopping LSL recorder: {e}")
-            self.lsl_recorder = None
         
         # Close LSL streamers
         if self.lsl_streamer:
             self.lsl_streamer.close()
+            self.lsl_streamer = None
         if self.lsl_mouse_streamer:
             self.lsl_mouse_streamer.close()
+            self.lsl_mouse_streamer = None
         
         # Calculate session duration
         session_end_time = datetime.now()
         duration = (session_end_time - self.session_start_time).total_seconds()
         self.session.duration = duration
         
-        # Save session data (including LSL data)
+        # Save session data (including LSL data) - use stored reference
+        # Temporarily restore recorder for saving
+        self.lsl_recorder = lsl_recorder_to_save
         self._save_session_data()
+        # Now we can set it to None
+        self.lsl_recorder = None
         
         # Emit session ended signal
         self.session_ended.emit(self.session.session_id)
@@ -1699,30 +1715,57 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         # Save LSL recorded data if available (this is the comprehensive record with all streams)
         # Try to save even if there was an error, as long as we have some data
+        lsl_file = tracking_dir / "lsl_recorded_data.json"
+        sample_count = 0
+        
         if self.lsl_recorder:
             try:
-                if self.lsl_recorder.recorded_data:
-                    lsl_file = tracking_dir / "lsl_recorded_data.json"
-                    # Include all tracking data in LSL file for completeness
-                    # (even though most should already be in LSL streams)
-                    self.lsl_recorder.save_to_file(str(lsl_file), additional_tracking_data=self.tracking_data)
-                    print(f"Saved {len(self.lsl_recorder.recorded_data)} LSL samples to {lsl_file}")
+                # Always try to save, even if recorded_data is empty (might have stream info)
+                # Get recorded data count before saving
+                sample_count = len(self.lsl_recorder.recorded_data) if hasattr(self.lsl_recorder, 'recorded_data') and self.lsl_recorder.recorded_data else 0
+                
+                # Include all tracking data in LSL file for completeness
+                # (even though most should already be in LSL streams)
+                self.lsl_recorder.save_to_file(str(lsl_file), additional_tracking_data=self.tracking_data)
+                
+                if sample_count > 0:
+                    print(f"Saved {sample_count} LSL samples to {lsl_file}")
                 else:
-                    print("Warning: LSL recorder has no recorded data to save")
+                    print(f"Warning: LSL recorder has no recorded data, but saved empty file to {lsl_file}")
             except Exception as e:
                 print(f"Error saving LSL data: {e}")
                 import traceback
                 traceback.print_exc()
+                # Try to save at least the structure even if there's an error
+                try:
+                    # Create minimal LSL file structure
+                    minimal_lsl_data = {
+                        'session_id': self.session.session_id,
+                        'stream_info': self.lsl_recorder.stream_info if hasattr(self.lsl_recorder, 'stream_info') else [],
+                        'session_start_time': self.lsl_recorder.session_start_time if hasattr(self.lsl_recorder, 'session_start_time') else None,
+                        'total_samples': 0,
+                        'lsl_samples': [],
+                        'error': str(e)
+                    }
+                    with open(lsl_file, 'w', encoding='utf-8') as f:
+                        json.dump(minimal_lsl_data, f, indent=2)
+                    print(f"Saved minimal LSL file structure to {lsl_file} (error occurred during save)")
+                except Exception as e2:
+                    print(f"Could not save even minimal LSL file: {e2}")
             
             # Also add LSL data summary to tracking data
+            if hasattr(self.lsl_recorder, 'recorded_data') and self.lsl_recorder.recorded_data:
+                sample_count = len(self.lsl_recorder.recorded_data)
             lsl_summary = {
                 'timestamp': datetime.now().isoformat(),
                 'event_type': 'lsl_summary',
-                'total_samples': len(self.lsl_recorder.recorded_data),
-                'streams': self.lsl_recorder.stream_info,
+                'total_samples': sample_count,
+                'streams': self.lsl_recorder.stream_info if hasattr(self.lsl_recorder, 'stream_info') else [],
                 'session_id': self.session.session_id
             }
             self.tracking_data.append(lsl_summary)
+        else:
+            print(f"Warning: LSL recorder is None, cannot save LSL data")
         
         # Update session metadata
         self.session.tracking_data_path = tracking_dir
@@ -1997,14 +2040,11 @@ class SessionReviewWindow(QMainWindow):
                 last_timestamp = None
                 for event in self.tracking_data:
                     ts = event.get('timestamp')
-                    if ts and isinstance(ts, str):
-                        try:
-                            dt = datetime.fromisoformat(ts)
-                            if first_timestamp is None:
-                                first_timestamp = dt
-                            last_timestamp = dt
-                        except (ValueError, TypeError):
-                            continue
+                    dt = self._parse_timestamp(ts)
+                    if dt:
+                        if first_timestamp is None:
+                            first_timestamp = dt
+                        last_timestamp = dt
                 
                 if first_timestamp and last_timestamp:
                     self.session_start_time = first_timestamp
@@ -2143,41 +2183,83 @@ class SessionReviewWindow(QMainWindow):
         # Populate LSL table
         self._populate_lsl_table()
     
+    def _parse_timestamp(self, timestamp) -> Optional[datetime]:
+        """Parse timestamp from various formats (ISO string, integer milliseconds, etc.)."""
+        if not timestamp:
+            return None
+        elif isinstance(timestamp, str):
+            try:
+                return datetime.fromisoformat(timestamp)
+            except (ValueError, TypeError):
+                return None
+        elif isinstance(timestamp, (int, float)):
+            # JavaScript Date.now() returns milliseconds since epoch
+            # If it's a large number (> year 2000 in seconds), it's likely milliseconds
+            if timestamp > 946684800000:  # Year 2000 in milliseconds
+                # Convert from milliseconds to seconds
+                return datetime.fromtimestamp(timestamp / 1000.0)
+            else:
+                # Assume seconds
+                return datetime.fromtimestamp(timestamp)
+        return None
+    
     def _populate_events_table(self):
-        """Populate the events table with tracking data."""
-        print(f"[SessionReview] Populating events table with {len(self.tracking_data)} events")
-        self.events_table.setRowCount(len(self.tracking_data))
+        """Populate the events table with tracking data.
         
-        if not self.tracking_data:
-            print("[SessionReview] No tracking data to display")
+        Only shows bridge events and session start/stop events.
+        Mouse events are shown in LSL data table instead.
+        """
+        # Extract bridge events from LSL data (primary source)
+        bridge_events_from_lsl = []
+        for sample in self.lsl_data:
+            data = sample.get('data', {})
+            if isinstance(data, dict) and data.get('type'):
+                # This is a bridge event from LSL
+                bridge_events_from_lsl.append({
+                    'timestamp': sample.get('timestamp'),
+                    'relative_time': sample.get('relative_time', 0.0),
+                    'event_type': 'bridge_event',
+                    'bridge_event_type': data.get('type'),
+                    'bridge_event_data': data.get('data', {}),
+                    'from_lsl': True
+                })
+        
+        # Also check tracking_data for any bridge events and session_start (fallback)
+        filtered_events = [
+            event for event in self.tracking_data
+            if event.get('event_type') in ['bridge_event', 'lsl_summary', 'session_start']
+        ]
+        
+        # Combine and sort by time
+        all_events = bridge_events_from_lsl + filtered_events
+        # Sort by relative_time or timestamp
+        all_events.sort(key=lambda e: e.get('relative_time', 0.0) if 'relative_time' in e else 0.0)
+        
+        print(f"[SessionReview] Populating events table with {len(all_events)} bridge events (from LSL and tracking data)")
+        self.events_table.setRowCount(len(all_events))
+        
+        if not all_events:
+            print("[SessionReview] No bridge events to display")
             return
         
-        for i, event in enumerate(self.tracking_data):
-            # Calculate relative time - handle different timestamp formats
-            timestamp = event.get('timestamp')
-            if not timestamp:
-                relative_time = 0.0
-            elif isinstance(timestamp, str):
-                try:
-                    event_time = datetime.fromisoformat(timestamp)
-                    if self.session_start_time:
-                        relative_time = (event_time - self.session_start_time).total_seconds()
-                    else:
-                        relative_time = 0.0
-                except (ValueError, TypeError) as e:
-                    print(f"[SessionReview] Error parsing timestamp '{timestamp}': {e}")
-                    relative_time = 0.0
+        for i, event in enumerate(all_events):
+            # Get relative time (prefer relative_time from LSL, otherwise calculate)
+            if 'relative_time' in event:
+                relative_time = event['relative_time']
             else:
-                # Timestamp might be a datetime object or other type
-                print(f"[SessionReview] Unexpected timestamp type: {type(timestamp)}, value: {timestamp}")
-                relative_time = 0.0
+                timestamp = event.get('timestamp')
+                event_time = self._parse_timestamp(timestamp)
+                if event_time and self.session_start_time:
+                    relative_time = (event_time - self.session_start_time).total_seconds()
+                else:
+                    relative_time = 0.0
             
             # Time column
             time_str = f"{relative_time:.2f}s"
             self.events_table.setItem(i, 0, QTableWidgetItem(time_str))
             
             # Event type
-            event_type = event.get('event_type', 'unknown')
+            event_type = event.get('event_type', 'session_start')
             self.events_table.setItem(i, 1, QTableWidgetItem(event_type))
             
             # Event details
@@ -2188,10 +2270,13 @@ class SessionReviewWindow(QMainWindow):
                 bridge_data = event.get('bridge_event_data', {})
                 details_str = str(bridge_data)[:100]  # Truncate long details
                 self.events_table.setItem(i, 3, QTableWidgetItem(details_str))
-            elif event_type in ['mouse_press', 'mouse_release', 'mouse_move']:
-                self.events_table.setItem(i, 2, QTableWidgetItem(event_type.replace('_', ' ').title()))
-                mouse_pos = event.get('mouse_position', [0, 0])
-                self.events_table.setItem(i, 3, QTableWidgetItem(f"Position: ({mouse_pos[0]}, {mouse_pos[1]})"))
+            elif event_type == 'lsl_summary':
+                self.events_table.setItem(i, 2, QTableWidgetItem("LSL Summary"))
+                total_samples = event.get('total_samples', 0)
+                self.events_table.setItem(i, 3, QTableWidgetItem(f"{total_samples} samples recorded"))
+            elif event_type == 'session_start':
+                self.events_table.setItem(i, 2, QTableWidgetItem("Session Start"))
+                self.events_table.setItem(i, 3, QTableWidgetItem("Session began"))
             else:
                 self.events_table.setItem(i, 2, QTableWidgetItem(event_type))
                 self.events_table.setItem(i, 3, QTableWidgetItem(str(event)[:100]))
@@ -2317,28 +2402,47 @@ class SessionReviewWindow(QMainWindow):
                     self.video_scene.addItem(line)
     
     def _get_mouse_position_at_time(self, time: float) -> Optional[tuple]:
-        """Get mouse position at a specific time."""
+        """Get mouse position at a specific time from LSL data."""
+        # First try LSL data (primary source)
+        closest = None
+        min_diff = float('inf')
+        
+        for sample in self.lsl_data:
+            stream_name = sample.get('stream_name', '')
+            if stream_name == 'MadsPipeline_MouseTracking':
+                relative_time = sample.get('relative_time', 0.0)
+                diff = abs(relative_time - time)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest = sample
+        
+        if closest:
+            data = closest.get('data', [])
+            if isinstance(data, list) and len(data) >= 2:
+                # Mouse tracking data: [x, y, event_type]
+                return (data[0], data[1])
+            elif isinstance(data, dict) and 'mouse_position' in data:
+                pos = data['mouse_position']
+                if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                    return (pos[0], pos[1])
+        
+        # Fallback to tracking_data if LSL doesn't have it
         if not self.session_start_time:
             return None
         
         target_time = self.session_start_time.timestamp() + time
         
-        # Find closest tracking data point
-        closest = None
-        min_diff = float('inf')
-        
         for event in self.tracking_data:
-            timestamp = event.get('timestamp')
-            if not timestamp or not isinstance(timestamp, str):
+            if 'mouse_position' not in event:
                 continue
-            try:
-                event_time = datetime.fromisoformat(timestamp).timestamp()
-                diff = abs(event_time - target_time)
+            timestamp = event.get('timestamp')
+            event_time = self._parse_timestamp(timestamp)
+            if event_time:
+                event_timestamp = event_time.timestamp()
+                diff = abs(event_timestamp - target_time)
                 if diff < min_diff:
                     min_diff = diff
                     closest = event
-            except (ValueError, TypeError):
-                continue
         
         if closest and 'mouse_position' in closest:
             pos = closest['mouse_position']
@@ -2348,26 +2452,41 @@ class SessionReviewWindow(QMainWindow):
         return None
     
     def _get_mouse_trail(self, time: float, duration: float = 2.0) -> List[tuple]:
-        """Get mouse trail (positions) for the last N seconds."""
-        if not self.session_start_time:
-            return []
-        
-        start_time = self.session_start_time.timestamp() + max(0, time - duration)
-        end_time = self.session_start_time.timestamp() + time
+        """Get mouse trail (positions) for the last N seconds from LSL data."""
+        start_time = max(0, time - duration)
+        end_time = time
         
         trail = []
-        for event in self.tracking_data:
-            timestamp = event.get('timestamp')
-            if not timestamp or not isinstance(timestamp, str):
-                continue
-            try:
-                event_time = datetime.fromisoformat(timestamp).timestamp()
-                if start_time <= event_time <= end_time and 'mouse_position' in event:
-                    pos = event['mouse_position']
-                    if isinstance(pos, (list, tuple)) and len(pos) >= 2:
-                        trail.append((pos[0], pos[1]))
-            except (ValueError, TypeError):
-                continue
+        # Get mouse positions from LSL data (primary source)
+        for sample in self.lsl_data:
+            stream_name = sample.get('stream_name', '')
+            if stream_name == 'MadsPipeline_MouseTracking':
+                relative_time = sample.get('relative_time', 0.0)
+                if start_time <= relative_time <= end_time:
+                    data = sample.get('data', [])
+                    if isinstance(data, list) and len(data) >= 2:
+                        trail.append((data[0], data[1]))
+                    elif isinstance(data, dict) and 'mouse_position' in data:
+                        pos = data['mouse_position']
+                        if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                            trail.append((pos[0], pos[1]))
+        
+        # Fallback to tracking_data if LSL doesn't have enough data
+        if not trail and self.session_start_time:
+            start_timestamp = self.session_start_time.timestamp() + start_time
+            end_timestamp = self.session_start_time.timestamp() + end_time
+            
+            for event in self.tracking_data:
+                if 'mouse_position' not in event:
+                    continue
+                timestamp = event.get('timestamp')
+                event_time = self._parse_timestamp(timestamp)
+                if event_time:
+                    event_timestamp = event_time.timestamp()
+                    if start_timestamp <= event_timestamp <= end_timestamp:
+                        pos = event['mouse_position']
+                        if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                            trail.append((pos[0], pos[1]))
         
         return trail
     
