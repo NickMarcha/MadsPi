@@ -68,6 +68,20 @@
   - [ ] Mouse position overlay on screen
   - [ ] Live tracking data display
 - [ ] Implement session controls and monitoring
+- [ ] **CRITICAL: Integrate HTML-to-Python bridge with embedded webpage sessions**
+  - [ ] Set up QWebChannel bridge in EmbeddedWebpageSessionWindow
+  - [ ] Connect bridge to receive events from HTML pages
+  - [ ] Parse and validate bridge messages/events
+- [ ] **CRITICAL: Implement LSL streaming from bridge events**
+  - [ ] Create LSL stream outlet for bridge events
+  - [ ] Stream events from HTML bridge to LSL in real-time
+  - [ ] Handle event types (clicks, markers, custom events, etc.)
+  - [ ] Timestamp synchronization between bridge events and LSL
+- [ ] **CRITICAL: Integrate LSL stream recording into sessions**
+  - [ ] Record LSL streams during session recording
+  - [ ] Save LSL stream data to session tracking data
+  - [ ] Synchronize LSL streams with session timeline
+  - [ ] Support multiple LSL streams (bridge events + hardware devices)
 
 ## 6. Session Review & Analysis Interface
 
@@ -127,10 +141,13 @@
   - [ ] Abstract tracking device classes
   - [ ] Plugin system for new devices
   - [ ] Data format standardization
-- [ ] Implement LSL integration framework
-  - [ ] Stream management
-  - [ ] Data synchronization
-  - [ ] Device detection and connection
+- [ ] **CRITICAL: Implement LSL integration framework**
+  - [ ] Stream management (create, start, stop LSL streams)
+  - [ ] LSL stream recording during sessions
+  - [ ] Data synchronization (timestamps, multiple streams)
+  - [ ] Device detection and connection (EmotiBit, Tobii Pro Spark)
+  - [ ] **HTML bridge event streaming to LSL** (required for embedded webpage sessions)
+  - [ ] LSL stream playback and analysis
 
 ## 11. Testing & Quality Assurance
 

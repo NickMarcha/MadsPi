@@ -4,7 +4,7 @@
 
 ## Project Goals
 
-Open-source pipeline for collecting data on eyetracking, heart rate, and electrodermal activity when a reader is viewing or interacting with a visual data story. Should support both EmotiBit and Tobii Pro Spark through Lab Streaming Layer (LSL)
+Open-source pipeline for collecting data on eyetracking, heart rate, and electrothermal activity when a reader is viewing or interacting with a visual data story. Should support both EmotiBit and Tobii Pro Spark through Lab Streaming Layer (LSL)
 
 End result should be a graphical tool that combines and captures the data from supported devices during an experimental session. Ideally for Linux or Mac OS,
 
@@ -35,6 +35,7 @@ scripts\setup_windows.ps1
 .\.venv\Scripts\activate
 python src/madspipeline/main.py
 ```
+
 If you have issues running the script, do this first
 
 ```powershell
