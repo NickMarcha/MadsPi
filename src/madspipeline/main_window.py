@@ -29,6 +29,18 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebChannel import QWebChannel
 
+try:
+    import matplotlib
+    matplotlib.use('Qt5Agg')
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.figure import Figure
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    FigureCanvas = None
+    Figure = None
+
 
 class ConsoleLoggingWebPage(QWebEnginePage):
     """Custom QWebEnginePage that forwards JavaScript console messages to Python print."""
@@ -2515,6 +2527,8 @@ class SessionReviewWindow(QMainWindow):
         self.events_table.setHorizontalHeaderLabels(["Time", "Type", "Event", "Details"])
         self.events_table.horizontalHeader().setStretchLastSection(True)
         self.events_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.events_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.events_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.events_table.itemSelectionChanged.connect(self._on_event_selected)
         events_layout.addWidget(self.events_table)
         
@@ -2570,6 +2584,25 @@ class SessionReviewWindow(QMainWindow):
         right_splitter.setSizes([400, 300])
         main_splitter.addWidget(right_splitter)
         
+        # Plots area (matplotlib graphs)
+        plots_group = QGroupBox("Data Visualization")
+        plots_layout = QVBoxLayout()
+        
+        if MATPLOTLIB_AVAILABLE:
+            self.plot_canvas = FigureCanvas(Figure(figsize=(8, 4), dpi=100))
+            self.plot_axes = self.plot_canvas.figure.subplots()
+            plots_layout.addWidget(self.plot_canvas)
+        else:
+            no_plot_label = QLabel("matplotlib not available for graphing")
+            no_plot_label.setStyleSheet("color: gray; font-style: italic;")
+            plots_layout.addWidget(no_plot_label)
+        
+        plots_group.setLayout(plots_layout)
+        right_splitter.addWidget(plots_group)
+        
+        right_splitter.setSizes([400, 300, 300])
+        main_splitter.addWidget(right_splitter)
+        
         main_splitter.setSizes([800, 400])
         main_layout.addWidget(main_splitter)
         
@@ -2578,6 +2611,122 @@ class SessionReviewWindow(QMainWindow):
         
         # Populate LSL table
         self._populate_lsl_table()
+        
+        # Set up plotting (if matplotlib available)
+        self._setup_plots()
+    
+    def _setup_plots(self):
+        """Parse LSL data channels and set up graphs for numeric data."""
+        if not MATPLOTLIB_AVAILABLE or not hasattr(self, 'plot_axes'):
+            return
+        
+        try:
+            # Extract unique streams and their numeric channels
+            self.plot_data = {}  # {stream_name: {channel_idx: {times: [], values: []}}}
+            
+            for sample in self.lsl_data:
+                stream_name = sample.get('stream_name', '')
+                relative_time = sample.get('relative_time', 0.0)
+                data = sample.get('data', [])
+                
+                # Try to parse data as numeric
+                if isinstance(data, list):
+                    for ch_idx, value in enumerate(data):
+                        try:
+                            numeric_val = float(value)
+                            if stream_name not in self.plot_data:
+                                self.plot_data[stream_name] = {}
+                            if ch_idx not in self.plot_data[stream_name]:
+                                self.plot_data[stream_name][ch_idx] = {'times': [], 'values': []}
+                            self.plot_data[stream_name][ch_idx]['times'].append(relative_time)
+                            self.plot_data[stream_name][ch_idx]['values'].append(numeric_val)
+                        except (ValueError, TypeError):
+                            pass
+                elif isinstance(data, (int, float)):
+                    try:
+                        numeric_val = float(data)
+                        if stream_name not in self.plot_data:
+                            self.plot_data[stream_name] = {}
+                        if 0 not in self.plot_data[stream_name]:
+                            self.plot_data[stream_name][0] = {'times': [], 'values': []}
+                        self.plot_data[stream_name][0]['times'].append(relative_time)
+                        self.plot_data[stream_name][0]['values'].append(numeric_val)
+                    except (ValueError, TypeError):
+                        pass
+            
+            # Initial plot draw
+            self._redraw_plots()
+            
+        except Exception as e:
+            print(f"[SessionReview] Error setting up plots: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _redraw_plots(self):
+        """Redraw plots with current playback time indicator."""
+        if not MATPLOTLIB_AVAILABLE or not hasattr(self, 'plot_axes'):
+            return
+        
+        try:
+            axes = self.plot_axes
+            axes.clear()
+            
+            if not self.plot_data:
+                axes.text(0.5, 0.5, 'No numeric data to plot', 
+                         ha='center', va='center', transform=axes.transAxes)
+                self.plot_canvas.draw()
+                return
+            
+            # Plot each stream and channel
+            plot_idx = 1
+            num_plots = sum(len(channels) for channels in self.plot_data.values())
+            
+            if num_plots == 0:
+                axes.text(0.5, 0.5, 'No numeric channels found', 
+                         ha='center', va='center', transform=axes.transAxes)
+                self.plot_canvas.draw()
+                return
+            
+            # Create subplots dynamically
+            fig = self.plot_canvas.figure
+            fig.clear()
+            subplots = []
+            plot_idx = 1
+            
+            for stream_name in sorted(self.plot_data.keys()):
+                channels = self.plot_data[stream_name]
+                for ch_idx in sorted(channels.keys()):
+                    times = channels[ch_idx]['times']
+                    values = channels[ch_idx]['values']
+                    
+                    if not times or not values:
+                        continue
+                    
+                    ax = fig.add_subplot(num_plots, 1, plot_idx)
+                    subplots.append(ax)
+                    
+                    # Plot data
+                    ax.plot(times, values, linewidth=1, alpha=0.7, label=f'{stream_name} Ch{ch_idx}')
+                    ax.set_ylabel(f'{stream_name} Ch{ch_idx}')
+                    ax.legend(loc='upper right', fontsize=8)
+                    ax.grid(True, alpha=0.3)
+                    
+                    # Add current time line
+                    ax.axvline(self.current_time, color='red', linestyle='--', linewidth=1, alpha=0.5)
+                    
+                    plot_idx += 1
+            
+            # Set x-label only on bottom plot
+            if subplots:
+                subplots[-1].set_xlabel('Time (s)')
+            
+            fig.tight_layout()
+            self.plot_canvas.draw()
+            
+        except Exception as e:
+            print(f"[SessionReview] Error redrawing plots: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _parse_timestamp(self, timestamp) -> Optional[datetime]:
         """Parse timestamp from various formats (ISO string, integer milliseconds, etc.)."""
@@ -2660,6 +2809,12 @@ class SessionReviewWindow(QMainWindow):
             else:
                 self.events_table.setItem(i, 2, QTableWidgetItem(event_type))
                 self.events_table.setItem(i, 3, QTableWidgetItem(str(event)[:100]))
+
+        # After populating, update highlighted event for current playback time
+        try:
+            self._highlight_last_event_for_time(self.current_time)
+        except Exception:
+            pass
     
     def _populate_lsl_table(self):
         """Populate the LSL data table using current filter and pagination.
@@ -2831,6 +2986,11 @@ class SessionReviewWindow(QMainWindow):
         # Start playing
         if not self.is_playing:
             self._toggle_playback()
+        # Highlight event at time 0
+        try:
+            self._highlight_last_event_for_time(self.current_time)
+        except Exception:
+            pass
     
     def _update_playback(self):
         """Update playback position."""
@@ -2860,6 +3020,16 @@ class SessionReviewWindow(QMainWindow):
         
         # Update overlay
         self._update_overlay()
+        # Highlight last event for current playback time
+        try:
+            self._highlight_last_event_for_time(self.current_time)
+        except Exception:
+            pass
+        # Update plots to show current time indicator
+        try:
+            self._redraw_plots()
+        except Exception:
+            pass
     
     def _on_timeline_changed(self, value):
         """Handle timeline slider change."""
@@ -2877,6 +3047,16 @@ class SessionReviewWindow(QMainWindow):
         current_str = f"{int(self.current_time // 60):02d}:{int(self.current_time % 60):02d}"
         duration_str = f"{int(self.session_duration // 60):02d}:{int(self.session_duration % 60):02d}"
         self.time_label.setText(f"{current_str} / {duration_str}")
+        # Update event highlight to match timeline
+        try:
+            self._highlight_last_event_for_time(self.current_time)
+        except Exception:
+            pass
+        # Update plots to show current time indicator
+        try:
+            self._redraw_plots()
+        except Exception:
+            pass
     
     def _update_overlay(self):
         """Update mouse tracking overlay on video."""
@@ -3128,6 +3308,45 @@ class SessionReviewWindow(QMainWindow):
                     self.time_label.setText(f"{current_str} / {duration_str}")
                 except ValueError:
                     pass
+
+    def _highlight_last_event_for_time(self, time_seconds: float):
+        """Select the last event whose time is <= time_seconds.
+
+        If no such event exists, clear selection.
+        """
+        if not hasattr(self, 'events_table'):
+            return
+        row_to_select = None
+        try:
+            row_count = self.events_table.rowCount()
+            last_idx = None
+            for r in range(row_count):
+                item = self.events_table.item(r, 0)
+                if not item:
+                    continue
+                txt = item.text().replace('s', '')
+                try:
+                    t = float(txt)
+                except Exception:
+                    continue
+                if t <= time_seconds:
+                    last_idx = r
+                else:
+                    break
+
+            if last_idx is not None:
+                # select and ensure visible
+                self.events_table.selectRow(last_idx)
+                it = self.events_table.item(last_idx, 0)
+                if it:
+                    try:
+                        self.events_table.scrollToItem(it)
+                    except Exception:
+                        pass
+            else:
+                self.events_table.clearSelection()
+        except Exception as e:
+            print(f"[SessionReview] Error highlighting event: {e}")
 
 
 class MainWindow(QMainWindow):
