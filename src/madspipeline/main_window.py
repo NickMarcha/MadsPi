@@ -2588,6 +2588,24 @@ class SessionReviewWindow(QMainWindow):
         plots_group = QGroupBox("Data Visualization")
         plots_layout = QVBoxLayout()
         
+        # Channel selection controls
+        if MATPLOTLIB_AVAILABLE:
+            channel_controls_label = QLabel("Select channels to display:")
+            plots_layout.addWidget(channel_controls_label)
+            
+            # Scrollable area for checkboxes
+            channel_scroll = QScrollArea()
+            channel_scroll.setWidgetResizable(True)
+            channel_scroll.setMaximumHeight(120)
+            
+            channel_widget = QWidget()
+            self.channel_layout = QVBoxLayout(channel_widget)
+            self.channel_layout.setContentsMargins(0, 0, 0, 0)
+            self.channel_checkboxes = []  # Will store (checkbox, stream_name, ch_idx)
+            
+            channel_scroll.setWidget(channel_widget)
+            plots_layout.addWidget(channel_scroll)
+        
         if MATPLOTLIB_AVAILABLE:
             self.plot_canvas = FigureCanvas(Figure(figsize=(8, 4), dpi=100))
             self.plot_axes = self.plot_canvas.figure.subplots()
@@ -2654,6 +2672,31 @@ class SessionReviewWindow(QMainWindow):
                     except (ValueError, TypeError):
                         pass
             
+            # Build flat list of (stream_name, ch_idx) for easy indexing
+            self.plot_channels = []  # List of (stream_name, ch_idx)
+            for stream_name in sorted(self.plot_data.keys()):
+                for ch_idx in sorted(self.plot_data[stream_name].keys()):
+                    self.plot_channels.append((stream_name, ch_idx))
+            
+            print(f"[SessionReview] Found {len(self.plot_channels)} numeric channels")
+            
+            # Create checkboxes for each channel
+            if hasattr(self, 'channel_layout'):
+                # Clear existing checkboxes
+                while self.channel_layout.count():
+                    self.channel_layout.takeAt(0).widget().deleteLater()
+                self.channel_checkboxes = []
+                
+                for idx, (stream_name, ch_idx) in enumerate(self.plot_channels):
+                    checkbox = QCheckBox(f"{stream_name} Ch{ch_idx}")
+                    # Check first 2 by default
+                    checkbox.setChecked(idx < 2)
+                    checkbox.stateChanged.connect(lambda: self._redraw_plots())
+                    self.channel_layout.addWidget(checkbox)
+                    self.channel_checkboxes.append((checkbox, stream_name, ch_idx))
+                
+                self.channel_layout.addStretch()
+            
             # Initial plot draw
             self._redraw_plots()
             
@@ -2677,44 +2720,44 @@ class SessionReviewWindow(QMainWindow):
                 self.plot_canvas.draw()
                 return
             
-            # Plot each stream and channel
-            plot_idx = 1
-            num_plots = sum(len(channels) for channels in self.plot_data.values())
+            # Collect checked channels
+            channels_to_plot = []
+            if hasattr(self, 'channel_checkboxes'):
+                for checkbox, stream_name, ch_idx in self.channel_checkboxes:
+                    if checkbox.isChecked():
+                        channels_to_plot.append((stream_name, ch_idx))
             
-            if num_plots == 0:
-                axes.text(0.5, 0.5, 'No numeric channels found', 
+            if not channels_to_plot:
+                axes.text(0.5, 0.5, 'No channels selected', 
                          ha='center', va='center', transform=axes.transAxes)
                 self.plot_canvas.draw()
                 return
+            
+            num_plots = len(channels_to_plot)
             
             # Create subplots dynamically
             fig = self.plot_canvas.figure
             fig.clear()
             subplots = []
-            plot_idx = 1
             
-            for stream_name in sorted(self.plot_data.keys()):
-                channels = self.plot_data[stream_name]
-                for ch_idx in sorted(channels.keys()):
-                    times = channels[ch_idx]['times']
-                    values = channels[ch_idx]['values']
-                    
-                    if not times or not values:
-                        continue
-                    
-                    ax = fig.add_subplot(num_plots, 1, plot_idx)
-                    subplots.append(ax)
-                    
-                    # Plot data
-                    ax.plot(times, values, linewidth=1, alpha=0.7, label=f'{stream_name} Ch{ch_idx}')
-                    ax.set_ylabel(f'{stream_name} Ch{ch_idx}')
-                    ax.legend(loc='upper right', fontsize=8)
-                    ax.grid(True, alpha=0.3)
-                    
-                    # Add current time line
-                    ax.axvline(self.current_time, color='red', linestyle='--', linewidth=1, alpha=0.5)
-                    
-                    plot_idx += 1
+            for plot_idx, (stream_name, ch_idx) in enumerate(channels_to_plot):
+                times = self.plot_data[stream_name][ch_idx]['times']
+                values = self.plot_data[stream_name][ch_idx]['values']
+                
+                if not times or not values:
+                    continue
+                
+                ax = fig.add_subplot(num_plots, 1, plot_idx + 1)
+                subplots.append(ax)
+                
+                # Plot data
+                ax.plot(times, values, linewidth=1, alpha=0.7, label=f'{stream_name} Ch{ch_idx}')
+                ax.set_ylabel(f'{stream_name} Ch{ch_idx}')
+                ax.legend(loc='upper right', fontsize=8)
+                ax.grid(True, alpha=0.3)
+                
+                # Add current time line
+                ax.axvline(self.current_time, color='red', linestyle='--', linewidth=1, alpha=0.5)
             
             # Set x-label only on bottom plot
             if subplots:
