@@ -61,10 +61,11 @@ import json
 
 # Import local modules using absolute imports for direct execution
 from .project_manager import ProjectManager
-from .models import Project, Session, ProjectType, ScreenRecordingConfig
+from .models import Project, Session, ProjectType, ScreenRecordingConfig, LSLConfig
 from .madsBridge import Bridge
 from .lsl_integration import LSLBridgeStreamer, LSLMouseTrackingStreamer, LSLRecorder, LSL_AVAILABLE
 from .screen_recorder import ScreenRecorder, RECORDING_AVAILABLE
+from .lsl_manager import LSLStreamManagerDialog
 
 
 class ProjectCreationDialog(QDialog):
@@ -682,6 +683,7 @@ class ProjectDashboardWidget(QWidget):
     review_sessions_requested = Signal()
     export_data_requested = Signal()
     back_to_projects_requested = Signal()
+    lsl_management_requested = Signal()
     
     def __init__(self, project: Project, parent=None):
         super().__init__(parent)
@@ -755,6 +757,12 @@ class ProjectDashboardWidget(QWidget):
         
         self.edit_project_button = QPushButton("Edit Project")
         self.edit_project_button.clicked.connect(self.edit_project_requested.emit)
+        
+        # LSL Management button (only for embedded webpage projects)
+        if self.project.project_type == ProjectType.EMBEDDED_WEBPAGE:
+            self.lsl_management_button = QPushButton("Manage LSL Streams")
+            self.lsl_management_button.clicked.connect(self.lsl_management_requested.emit)
+            project_buttons_layout.addWidget(self.lsl_management_button)
         
         self.refresh_button = QPushButton("🔄 Refresh")
         self.refresh_button.setToolTip("Refresh project data and sessions")
@@ -1581,13 +1589,34 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             # Set up LSL streaming and recording
             if LSL_AVAILABLE:
                 try:
-                    # Create LSL streamer for bridge events
-                    self.lsl_streamer = LSLBridgeStreamer(self.session.session_id)
+                    # Get LSL configuration from project
+                    lsl_config = None
+                    if (self.project.embedded_webpage_config and 
+                        self.project.embedded_webpage_config.lsl_config):
+                        lsl_config = self.project.embedded_webpage_config.lsl_config
+                    else:
+                        # Use default config if not set
+                        lsl_config = LSLConfig(
+                            enable_mouse_tracking=True,
+                            enable_marker_api=self.project.embedded_webpage_config.enable_marker_api if self.project.embedded_webpage_config else True
+                        )
                     
-                    # Create LSL streamer for mouse tracking
-                    self.lsl_mouse_streamer = LSLMouseTrackingStreamer(self.session.session_id)
+                    # Create LSL streamer for bridge events (marker API) if enabled
+                    if lsl_config.enable_marker_api:
+                        self.lsl_streamer = LSLBridgeStreamer(self.session.session_id)
+                    else:
+                        self.lsl_streamer = None
+                        print("[LSL] Marker API stream disabled")
+                    
+                    # Create LSL streamer for mouse tracking if enabled
+                    if lsl_config.enable_mouse_tracking:
+                        self.lsl_mouse_streamer = LSLMouseTrackingStreamer(self.session.session_id)
+                    else:
+                        self.lsl_mouse_streamer = None
+                        print("[LSL] Mouse tracking stream disabled")
                     
                     # Create LSL recorder for all streams (will capture bridge events, mouse tracking, and any other devices)
+                    # The recorder will automatically detect and record all available LSL streams
                     self.lsl_recorder = LSLRecorder(self.session.session_id)
                     self.lsl_recorder.start_recording(wait_time=2.0)
                     
@@ -3045,6 +3074,7 @@ class MainWindow(QMainWindow):
             self.project_dashboard.review_sessions_requested.connect(self._on_review_sessions)
             self.project_dashboard.export_data_requested.connect(self._on_export_data)
             self.project_dashboard.back_to_projects_requested.connect(self._on_back_to_projects)
+            self.project_dashboard.lsl_management_requested.connect(self._on_lsl_management)
             
             self.stacked_widget.addWidget(self.project_dashboard)
         else:
@@ -3160,6 +3190,8 @@ class MainWindow(QMainWindow):
                     )
                 elif self.current_project.project_type == ProjectType.EMBEDDED_WEBPAGE:
                     from .models import EmbeddedWebpageConfig
+                    # Preserve existing LSL config if it exists
+                    existing_lsl_config = self.current_project.embedded_webpage_config.lsl_config if self.current_project.embedded_webpage_config else None
                     self.current_project.embedded_webpage_config = EmbeddedWebpageConfig(
                         webpage_url=dialog.project_config.get('webpage_url'),
                         local_html_path=Path(dialog.project_config.get('local_html_path')) if dialog.project_config.get('local_html_path') else None,
@@ -3168,7 +3200,8 @@ class MainWindow(QMainWindow):
                         allow_external_links=False,
                         window_size=dialog.project_config.get('window_size'),
                         enforce_fullscreen=dialog.project_config.get('enforce_fullscreen', False),
-                        normalize_mouse_coordinates=dialog.project_config.get('normalize_mouse_coordinates', True)
+                        normalize_mouse_coordinates=dialog.project_config.get('normalize_mouse_coordinates', True),
+                        lsl_config=existing_lsl_config  # Preserve LSL config
                     )
                 
                 # Update modified date
@@ -3184,6 +3217,45 @@ class MainWindow(QMainWindow):
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to update project: {e}")
+    
+    def _on_lsl_management(self):
+        """Handle LSL management request."""
+        if self.current_project.project_type != ProjectType.EMBEDDED_WEBPAGE:
+            QMessageBox.warning(self, "Error", "LSL management is only available for embedded webpage projects.")
+            return
+        
+        dialog = LSLStreamManagerDialog(self.current_project, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            try:
+                # Get updated LSL config
+                lsl_config = dialog.get_config()
+                
+                # Update project's LSL config
+                if not self.current_project.embedded_webpage_config:
+                    from .models import EmbeddedWebpageConfig
+                    self.current_project.embedded_webpage_config = EmbeddedWebpageConfig()
+                
+                self.current_project.embedded_webpage_config.lsl_config = lsl_config
+                # Also update legacy enable_marker_api for backward compatibility
+                self.current_project.embedded_webpage_config.enable_marker_api = lsl_config.enable_marker_api
+                
+                # Update modified date
+                self.current_project.modified_date = datetime.now()
+                
+                # Save updated project
+                self.project_manager._save_project_metadata(self.current_project)
+                
+                # Refresh dashboard
+                if self.project_dashboard:
+                    self.project_dashboard.refresh_project_data(self.current_project)
+                
+                QMessageBox.information(self, "Success", "LSL configuration saved successfully!")
+                
+            except Exception as e:
+                print(f"Error saving LSL configuration: {e}")
+                import traceback
+                traceback.print_exc()
+                QMessageBox.critical(self, "Error", f"Failed to save LSL configuration: {e}")
     
     def _on_review_sessions(self):
         """Handle review sessions request."""
