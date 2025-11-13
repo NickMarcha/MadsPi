@@ -21,10 +21,11 @@ from PySide6.QtWidgets import (
     QSplitter, QGroupBox, QFileDialog, QComboBox, QCheckBox,
     QSpinBox, QDoubleSpinBox, QSlider, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QGraphicsView, QGraphicsScene,
-    QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem
+    QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem,
+    QApplication, QToolTip
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QUrl, QPointF, QRectF
-from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPen, QBrush, QPainter, QWheelEvent
+from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPen, QBrush, QPainter, QWheelEvent, QCursor
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebChannel import QWebChannel
@@ -2530,6 +2531,8 @@ class SessionReviewWindow(QMainWindow):
         self.events_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.events_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.events_table.itemSelectionChanged.connect(self._on_event_selected)
+        # Allow clicking a cell to copy its full value to the clipboard
+        self.events_table.cellClicked.connect(self._copy_table_cell)
         events_layout.addWidget(self.events_table)
         
         events_group.setLayout(events_layout)
@@ -2577,6 +2580,8 @@ class SessionReviewWindow(QMainWindow):
         self.lsl_table.setHorizontalHeaderLabels(["Time", "Stream", "Channel", "Value"])
         self.lsl_table.horizontalHeader().setStretchLastSection(True)
         lsl_layout.addWidget(self.lsl_table)
+        # Allow clicking a cell to copy its full value to the clipboard
+        self.lsl_table.cellClicked.connect(self._copy_table_cell)
 
         lsl_group.setLayout(lsl_layout)
         right_splitter.addWidget(lsl_group)
@@ -2790,6 +2795,18 @@ class SessionReviewWindow(QMainWindow):
                 # Assume seconds
                 return datetime.fromtimestamp(timestamp)
         return None
+
+    def _format_time_ms(self, seconds: float) -> str:
+        """Format seconds as MM:SS.mmm (minutes:seconds.milliseconds)."""
+        try:
+            if seconds is None:
+                seconds = 0.0
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            ms = int((seconds - int(seconds)) * 1000)
+            return f"{mins:02d}:{secs:02d}.{ms:03d}"
+        except Exception:
+            return "00:00.000"
     
     def _populate_events_table(self):
         """Populate the events table with bridge events from LSL data only.
@@ -2829,29 +2846,46 @@ class SessionReviewWindow(QMainWindow):
         for i, event in enumerate(all_events):
             # Get relative time
             relative_time = event.get('relative_time', 0.0)
-            
-            # Time column
+
+            # Time column (store numeric relative time in UserRole for precise seeking)
             time_str = f"{relative_time:.2f}s"
-            self.events_table.setItem(i, 0, QTableWidgetItem(time_str))
-            
+            time_item = QTableWidgetItem(time_str)
+            time_item.setData(Qt.ItemDataRole.UserRole, float(relative_time))
+            self.events_table.setItem(i, 0, time_item)
+
             # Event type
             event_type = event.get('event_type', 'bridge_event')
-            self.events_table.setItem(i, 1, QTableWidgetItem(event_type))
-            
+            type_item = QTableWidgetItem(event_type)
+            type_item.setData(Qt.ItemDataRole.UserRole, event.get('bridge_event_type', event_type))
+            self.events_table.setItem(i, 1, type_item)
+
             # Event details
             if event_type == 'bridge_event':
                 bridge_type = event.get('bridge_event_type', 'unknown')
                 self.events_table.setItem(i, 2, QTableWidgetItem(f"Bridge: {bridge_type}"))
-                # Details
+                # Details: visible shortened text but store raw JSON in UserRole for copy
                 bridge_data = event.get('bridge_event_data', {})
-                details_str = str(bridge_data)[:100]  # Truncate long details
-                self.events_table.setItem(i, 3, QTableWidgetItem(details_str))
+                details_str = str(bridge_data)[:100]  # Truncate long details for display
+                details_item = QTableWidgetItem(details_str)
+                try:
+                    details_item.setData(Qt.ItemDataRole.UserRole, json.dumps(bridge_data, ensure_ascii=False))
+                except Exception:
+                    details_item.setData(Qt.ItemDataRole.UserRole, str(bridge_data))
+                self.events_table.setItem(i, 3, details_item)
             elif event_type == 'session_start':
-                self.events_table.setItem(i, 2, QTableWidgetItem("Session Start"))
-                self.events_table.setItem(i, 3, QTableWidgetItem("Session began"))
+                s_item = QTableWidgetItem("Session Start")
+                s_item.setData(Qt.ItemDataRole.UserRole, json.dumps(event, ensure_ascii=False))
+                self.events_table.setItem(i, 2, s_item)
+                info_item = QTableWidgetItem("Session began")
+                info_item.setData(Qt.ItemDataRole.UserRole, json.dumps(event, ensure_ascii=False))
+                self.events_table.setItem(i, 3, info_item)
             else:
-                self.events_table.setItem(i, 2, QTableWidgetItem(event_type))
-                self.events_table.setItem(i, 3, QTableWidgetItem(str(event)[:100]))
+                other_item = QTableWidgetItem(event_type)
+                other_item.setData(Qt.ItemDataRole.UserRole, json.dumps(event, ensure_ascii=False))
+                self.events_table.setItem(i, 2, other_item)
+                details_item = QTableWidgetItem(str(event)[:100])
+                details_item.setData(Qt.ItemDataRole.UserRole, json.dumps(event, ensure_ascii=False))
+                self.events_table.setItem(i, 3, details_item)
 
         # After populating, update highlighted event for current playback time
         try:
@@ -2899,7 +2933,13 @@ class SessionReviewWindow(QMainWindow):
 
             # Time
             relative_time = sample.get('relative_time', 0.0)
-            self.lsl_table.setItem(row_idx, 0, QTableWidgetItem(f"{relative_time:.3f}s"))
+            time_item = QTableWidgetItem(f"{relative_time:.3f}s")
+            # Store numeric relative time in user role for precise access
+            try:
+                time_item.setData(Qt.ItemDataRole.UserRole, float(relative_time))
+            except Exception:
+                time_item.setData(Qt.ItemDataRole.UserRole, relative_time)
+            self.lsl_table.setItem(row_idx, 0, time_item)
 
             # Stream name
             stream_name = sample.get('stream_name', 'Unknown')
@@ -2915,23 +2955,57 @@ class SessionReviewWindow(QMainWindow):
                     event_type_val = data[2] if len(data) > 2 else 0
                     event_type_map = {0.0: 'position', 1.0: 'press', 2.0: 'release', 3.0: 'move', 4.0: 'scroll'}
                     event_type_str = event_type_map.get(event_type_val, f'unknown({event_type_val})')
-                    self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Mouse"))
+                    ch_item = QTableWidgetItem("Mouse")
+                    self.lsl_table.setItem(row_idx, 2, ch_item)
                     if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
-                        self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(f"({x:.3f}, {y:.3f}) - {event_type_str}"))
+                        val_text = f"({x:.3f}, {y:.3f}) - {event_type_str}"
                     else:
-                        self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(f"({x:.0f}, {y:.0f}) - {event_type_str}"))
+                        val_text = f"({x:.0f}, {y:.0f}) - {event_type_str}"
+                    val_item = QTableWidgetItem(val_text)
+                    # Store raw sample data for copying
+                    try:
+                        raw = sample.get('raw_data')[0] if sample.get('raw_data') else json.dumps(sample.get('data', {}), ensure_ascii=False)
+                    except Exception:
+                        raw = str(sample.get('data', ''))
+                    val_item.setData(Qt.ItemDataRole.UserRole, raw)
+                    self.lsl_table.setItem(row_idx, 3, val_item)
                 else:
-                    self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Mouse"))
-                    self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(str(data)[:200]))
+                    ch_item = QTableWidgetItem("Mouse")
+                    self.lsl_table.setItem(row_idx, 2, ch_item)
+                    val_item = QTableWidgetItem(str(data)[:200])
+                    try:
+                        raw = sample.get('raw_data')[0] if sample.get('raw_data') else json.dumps(sample.get('data', {}), ensure_ascii=False)
+                    except Exception:
+                        raw = str(sample.get('data', ''))
+                    val_item.setData(Qt.ItemDataRole.UserRole, raw)
+                    self.lsl_table.setItem(row_idx, 3, val_item)
             elif isinstance(data, list) and len(data) > 0:
                 self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Ch 0"))
-                self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(str(data[0])[:200]))
+                val_item = QTableWidgetItem(str(data[0])[:200])
+                try:
+                    raw = sample.get('raw_data')[0] if sample.get('raw_data') else json.dumps(data, ensure_ascii=False)
+                except Exception:
+                    raw = str(data[0])
+                val_item.setData(Qt.ItemDataRole.UserRole, raw)
+                self.lsl_table.setItem(row_idx, 3, val_item)
             elif isinstance(data, dict):
                 self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Event"))
-                self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(str(data)[:200]))
+                val_item = QTableWidgetItem(str(data)[:200])
+                try:
+                    raw = sample.get('raw_data')[0] if sample.get('raw_data') else json.dumps(data, ensure_ascii=False)
+                except Exception:
+                    raw = str(data)
+                val_item.setData(Qt.ItemDataRole.UserRole, raw)
+                self.lsl_table.setItem(row_idx, 3, val_item)
             else:
                 self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("N/A"))
-                self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(str(data)[:200] if data else "N/A"))
+                val_item = QTableWidgetItem(str(data)[:200] if data else "N/A")
+                try:
+                    raw = sample.get('raw_data')[0] if sample.get('raw_data') else json.dumps(data, ensure_ascii=False)
+                except Exception:
+                    raw = str(data)
+                val_item.setData(Qt.ItemDataRole.UserRole, raw)
+                self.lsl_table.setItem(row_idx, 3, val_item)
 
         # Update page info and navigation buttons
         self.lsl_page_info.setText(f"Showing {start+1}-{end} of {total_filtered} matching samples (page {self.lsl_page+1}/{max_page+1})")
@@ -3057,9 +3131,7 @@ class SessionReviewWindow(QMainWindow):
             self.timeline_slider.blockSignals(False)
         
         # Update time label
-        current_str = f"{int(self.current_time // 60):02d}:{int(self.current_time % 60):02d}"
-        duration_str = f"{int(self.session_duration // 60):02d}:{int(self.session_duration % 60):02d}"
-        self.time_label.setText(f"{current_str} / {duration_str}")
+        self.time_label.setText(f"{self._format_time_ms(self.current_time)} / {self._format_time_ms(self.session_duration)}")
         
         # Update overlay
         self._update_overlay()
@@ -3087,9 +3159,7 @@ class SessionReviewWindow(QMainWindow):
         
         self._update_overlay()
         # Update time label
-        current_str = f"{int(self.current_time // 60):02d}:{int(self.current_time % 60):02d}"
-        duration_str = f"{int(self.session_duration // 60):02d}:{int(self.session_duration % 60):02d}"
-        self.time_label.setText(f"{current_str} / {duration_str}")
+        self.time_label.setText(f"{self._format_time_ms(self.current_time)} / {self._format_time_ms(self.session_duration)}")
         # Update event highlight to match timeline
         try:
             self._highlight_last_event_for_time(self.current_time)
@@ -3338,19 +3408,44 @@ class SessionReviewWindow(QMainWindow):
             row = selected_rows[0].row()
             time_item = self.events_table.item(row, 0)
             if time_item:
-                time_str = time_item.text().replace('s', '')
+                # Prefer numeric value stored in UserRole (set earlier when populating)
+                numeric = time_item.data(Qt.ItemDataRole.UserRole)
                 try:
-                    self.current_time = float(time_str)
+                    if numeric is not None:
+                        self.current_time = float(numeric)
+                    else:
+                        time_str = time_item.text().replace('s', '')
+                        self.current_time = float(time_str)
                     self.timeline_slider.blockSignals(True)
                     self.timeline_slider.setValue(int(self.current_time * 100))
                     self.timeline_slider.blockSignals(False)
                     self._update_overlay()
                     # Update time label
-                    current_str = f"{int(self.current_time // 60):02d}:{int(self.current_time % 60):02d}"
-                    duration_str = f"{int(self.session_duration // 60):02d}:{int(self.session_duration % 60):02d}"
-                    self.time_label.setText(f"{current_str} / {duration_str}")
+                    self.time_label.setText(f"{self._format_time_ms(self.current_time)} / {self._format_time_ms(self.session_duration)}")
                 except ValueError:
                     pass
+
+    def _copy_table_cell(self, row: int, column: int):
+        """Copy the clicked table cell's text to the clipboard and show a tooltip."""
+        try:
+            sender = self.sender()
+            if not sender:
+                return
+            item = sender.item(row, column)
+            if not item:
+                return
+            # Prefer raw value stored in UserRole (e.g., full JSON/raw_data). Fall back to displayed text.
+            raw = item.data(Qt.ItemDataRole.UserRole)
+            text = raw if (raw is not None and raw != '') else item.text()
+            clipboard = QApplication.clipboard()
+            clipboard.setText(str(text))
+            # Show a brief tooltip at the cursor position (truncate to avoid huge tooltips)
+            display_preview = str(text)
+            if len(display_preview) > 200:
+                display_preview = display_preview[:200] + '...'
+            QToolTip.showText(QCursor.pos(), f"Copied: {display_preview}")
+        except Exception:
+            pass
 
     def _highlight_last_event_for_time(self, time_seconds: float):
         """Select the last event whose time is <= time_seconds.

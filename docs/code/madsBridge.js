@@ -62,11 +62,21 @@ function sendToPython(message) {
 
 // Utility to send structured events to Python (for LSL streaming)
 function sendEvent(type, data) {
+  // If caller provided a high-level event timestamp (event_timestamp) or a data.timestamp,
+  // prefer that value to preserve the action time from the page. Fall back to Date.now().
+  const eventData = data || {};
+  const preferredTs = (eventData.event_timestamp !== undefined) ? eventData.event_timestamp : (eventData.timestamp !== undefined ? eventData.timestamp : Date.now());
+
   const event = {
     type: type,
-    data: data || {},
-    timestamp: Date.now()
+    data: eventData,
+    timestamp: preferredTs
   };
+
+  // Remove the transient event_timestamp field to avoid duplication in the payload
+  if (event.data.event_timestamp !== undefined) {
+    delete event.data.event_timestamp;
+  }
 
   sendToPython(JSON.stringify(event));
 }

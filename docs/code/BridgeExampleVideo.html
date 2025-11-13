@@ -740,7 +740,7 @@
         }
       }
 
-      // Make radio option boxes fully clickable
+      // Make radio option boxes fully clickable and track selections
       document.querySelectorAll('.radio-option').forEach(function(option) {
         option.addEventListener('click', function(e) {
           // Only trigger if not clicking directly on the radio input or label
@@ -753,6 +753,28 @@
             }
           }
         });
+        
+        // Track radio button selection (when user clicks radio input directly)
+        const radio = option.querySelector('input[type="radio"]');
+        if (radio) {
+          radio.addEventListener('change', function(e) {
+            if (this.checked) {
+              // Get the question name and answer value
+              const questionName = this.name;
+              const answerValue = this.value;
+              const labelElement = option.querySelector('label');
+              const answerLabel = labelElement ? labelElement.textContent.trim() : answerValue;
+              
+              // Send radio button selection event
+              sendEvent('radio_selected', {
+                question: questionName,
+                answer: answerValue,
+                answer_label: answerLabel,
+                timestamp: Date.now()
+              });
+            }
+          });
+        }
       });
 
       // Setup forms
@@ -779,15 +801,16 @@
 
       sessionData[category] = data;
 
-      // Send each answer through bridge
-      for (let [key, value] of formData.entries()) {
-        sendEvent('questionnaire_answer', {
-          category: category,
-          question: key,
-          answer: value,
-          timestamp: Date.now()
-        });
-      }
+      // Send a single aggregated form submission event (keep per-click `radio_selected` events)
+      // This avoids duplicate per-questionnaire events that have identical timestamps.
+      sendEvent('form_submitted', {
+        category: category,
+        form_data: data,
+        timestamp: Date.now(),
+        wall_clock: new Date().toISOString(),
+        // Keep this field too in case downstream code prefers the event_timestamp name
+        event_timestamp: Date.now()
+      });
     }
 
     function goToStep(step) {
