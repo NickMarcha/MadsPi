@@ -237,6 +237,11 @@ class LSLRecorder:
                     # Calculate relative timestamp from session start
                     relative_time = timestamp - self.session_start_time if self.session_start_time else 0.0
                     
+                    # Get clock offset for synchronization (CRITICAL for multi-device alignment)
+                    # The clock offset represents the difference between the remote device's clock
+                    # and the local machine's clock. This is essential for proper synchronization.
+                    clock_offset = inlet.time_correction()  # Returns offset in seconds
+                    
                     # Record the sample
                     recorded_sample = {
                         'timestamp': timestamp,
@@ -245,7 +250,9 @@ class LSLRecorder:
                         'stream_index': i,
                         'stream_info': self.stream_info[i],
                         'session_id': self.session_id,
-                        'recorded_at': datetime.now().isoformat()
+                        'recorded_at': datetime.now().isoformat(),
+                        'clock_offset': clock_offset,  # NEW: For post-hoc synchronization
+                        'local_time_when_recorded': local_clock()  # NEW: Reference for offset measurement timing
                     }
                     self.recorded_data.append(recorded_sample)
                     
@@ -305,11 +312,22 @@ class LSLRecorder:
                                 'stream_name': sample['stream_info']['name'],
                                 'stream_type': sample['stream_info']['type'],
                                 'data': parsed_data,
-                                'raw_data': sample['data']
+                                'raw_data': sample['data'],
+                                'clock_offset': sample.get('clock_offset'),  # PRESERVE: Clock offset for sync
+                                'local_time_when_recorded': sample.get('local_time_when_recorded')  # PRESERVE: Timing reference
                             })
                         except json.JSONDecodeError:
                             # Not JSON, keep as raw
-                            parsed_samples.append(sample)
+                            parsed_samples.append({
+                                'timestamp': sample['timestamp'],
+                                'relative_time': sample['relative_time'],
+                                'stream_name': sample['stream_info']['name'],
+                                'stream_type': sample['stream_info']['type'],
+                                'data': sample['data'],
+                                'raw_data': sample['data'],
+                                'clock_offset': sample.get('clock_offset'),  # PRESERVE: Clock offset for sync
+                                'local_time_when_recorded': sample.get('local_time_when_recorded')  # PRESERVE: Timing reference
+                            })
                     else:
                         # Numeric data (mouse tracking, etc.)
                         parsed_samples.append({
@@ -318,10 +336,20 @@ class LSLRecorder:
                             'stream_name': sample['stream_info']['name'],
                             'stream_type': sample['stream_info']['type'],
                             'data': sample['data'],
-                            'raw_data': sample['data']
+                            'raw_data': sample['data'],
+                            'clock_offset': sample.get('clock_offset'),  # PRESERVE: Clock offset for sync
+                            'local_time_when_recorded': sample.get('local_time_when_recorded')  # PRESERVE: Timing reference
                         })
                 else:
-                    parsed_samples.append(sample)
+                    parsed_samples.append({
+                        'timestamp': sample['timestamp'],
+                        'relative_time': sample['relative_time'],
+                        'stream_name': sample.get('stream_info', {}).get('name', 'unknown'),
+                        'stream_type': sample.get('stream_info', {}).get('type', 'unknown'),
+                        'data': sample['data'],
+                        'clock_offset': sample.get('clock_offset'),  # PRESERVE: Clock offset for sync
+                        'local_time_when_recorded': sample.get('local_time_when_recorded')  # PRESERVE: Timing reference
+                    })
             except Exception as e:
                 # Keep original sample if parsing fails
                 parsed_samples.append(sample)
@@ -331,7 +359,12 @@ class LSLRecorder:
             'stream_info': self.stream_info,
             'session_start_time': self.session_start_time,
             'total_samples': len(self.recorded_data),
-            'lsl_samples': parsed_samples
+            'lsl_samples': parsed_samples,
+            'synchronization_info': {  # NEW: Synchronization metadata
+                'sync_method': 'LSL_local_clock',
+                'clock_offset_type': 'offset between local and remote device clocks (seconds)',
+                'note': 'Use clock_offset from each sample for post-hoc synchronization with EmotiBit'
+            }
         }
         
         # Add additional tracking data if provided (for completeness)

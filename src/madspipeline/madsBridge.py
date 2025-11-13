@@ -4,6 +4,14 @@ Handles events from JavaScript and emits structured event signals.
 """
 import json
 from datetime import datetime
+
+try:
+    from pylsl import local_clock
+    LSL_AVAILABLE = True
+except ImportError:
+    LSL_AVAILABLE = False
+    local_clock = None
+
 from PySide6.QtCore import QObject, Slot, Signal
 
 
@@ -33,8 +41,12 @@ class Bridge(QObject):
             
             # Validate event structure
             if isinstance(event_data, dict) and 'type' in event_data:
-                # Add Python-side timestamp if not present
-                if 'timestamp' not in event_data:
+                # Add LSL timestamp (synchronized time domain)
+                if LSL_AVAILABLE and local_clock:
+                    event_data['timestamp'] = local_clock()  # LSL synchronized time
+                    event_data['wall_clock'] = datetime.now().isoformat()  # For reference
+                else:
+                    # Fallback if LSL not available
                     event_data['timestamp'] = datetime.now().isoformat()
                 
                 # Ensure 'data' field exists
