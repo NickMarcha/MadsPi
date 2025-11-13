@@ -2521,16 +2521,49 @@ class SessionReviewWindow(QMainWindow):
         events_group.setLayout(events_layout)
         right_splitter.addWidget(events_group)
         
-        # LSL data visualization
+        # LSL data visualization with filter and pagination
         lsl_group = QGroupBox("LSL Tracking Data")
         lsl_layout = QVBoxLayout()
-        
+
+        # Filter and pagination controls
+        controls_layout = QHBoxLayout()
+        controls_layout.addWidget(QLabel("Filter:"))
+        self.lsl_filter_edit = QLineEdit()
+        self.lsl_filter_edit.setPlaceholderText("Stream name or text (case-insensitive)")
+        self.lsl_filter_edit.textChanged.connect(self._apply_lsl_filter)
+        controls_layout.addWidget(self.lsl_filter_edit)
+
+        controls_layout.addWidget(QLabel("Page size:"))
+        self.lsl_page_size = QSpinBox()
+        self.lsl_page_size.setRange(10, 1000000)
+        self.lsl_page_size.setValue(100)
+        self.lsl_page_size.valueChanged.connect(lambda _: self._set_lsl_page(0))
+        controls_layout.addWidget(self.lsl_page_size)
+
+        self.lsl_prev_button = QPushButton("◀ Prev")
+        self.lsl_prev_button.clicked.connect(self._lsl_prev_page)
+        controls_layout.addWidget(self.lsl_prev_button)
+
+        self.lsl_next_button = QPushButton("Next ▶")
+        self.lsl_next_button.clicked.connect(self._lsl_next_page)
+        controls_layout.addWidget(self.lsl_next_button)
+
+        self.lsl_show_all_button = QPushButton("Show All")
+        self.lsl_show_all_button.clicked.connect(self._lsl_show_all)
+        controls_layout.addWidget(self.lsl_show_all_button)
+
+        self.lsl_page_info = QLabel("")
+        controls_layout.addWidget(self.lsl_page_info)
+        controls_layout.addStretch()
+
+        lsl_layout.addLayout(controls_layout)
+
         self.lsl_table = QTableWidget()
         self.lsl_table.setColumnCount(4)
         self.lsl_table.setHorizontalHeaderLabels(["Time", "Stream", "Channel", "Value"])
         self.lsl_table.horizontalHeader().setStretchLastSection(True)
         lsl_layout.addWidget(self.lsl_table)
-        
+
         lsl_group.setLayout(lsl_layout)
         right_splitter.addWidget(lsl_group)
         
@@ -2629,60 +2662,144 @@ class SessionReviewWindow(QMainWindow):
                 self.events_table.setItem(i, 3, QTableWidgetItem(str(event)[:100]))
     
     def _populate_lsl_table(self):
-        """Populate the LSL data table."""
+        """Populate the LSL data table using current filter and pagination.
+
+        This method uses `self.lsl_filtered_indices` (list of indices into `self.lsl_data`)
+        and `self.lsl_page` / `self.lsl_page_size` to determine which rows to show.
+        """
         print(f"[SessionReview] Populating LSL table with {len(self.lsl_data)} samples")
-        # Show first 100 samples (can be expanded later)
-        samples_to_show = min(100, len(self.lsl_data))
-        self.lsl_table.setRowCount(samples_to_show)
-        
-        if not self.lsl_data:
-            print("[SessionReview] No LSL data to display")
+
+        # Initialize filter/page state if not present
+        if not hasattr(self, 'lsl_filtered_indices'):
+            self.lsl_filtered_indices = list(range(len(self.lsl_data)))
+        if not hasattr(self, 'lsl_page'):
+            self.lsl_page = 0
+        # Ensure page_size widget exists
+        page_size = self.lsl_page_size.value() if hasattr(self, 'lsl_page_size') else 100
+
+        total_filtered = len(self.lsl_filtered_indices)
+        if total_filtered == 0:
+            self.lsl_table.setRowCount(0)
+            self.lsl_page_info.setText("No matching samples")
+            self.lsl_prev_button.setEnabled(False)
+            self.lsl_next_button.setEnabled(False)
             return
-        
-        for i, sample in enumerate(self.lsl_data[:samples_to_show]):
+
+        # Clamp page
+        max_page = max(0, (total_filtered - 1) // page_size)
+        if self.lsl_page > max_page:
+            self.lsl_page = max_page
+
+        start = self.lsl_page * page_size
+        end = min(start + page_size, total_filtered)
+        rows = end - start
+        self.lsl_table.setRowCount(rows)
+
+        for row_idx in range(rows):
+            sample_idx = self.lsl_filtered_indices[start + row_idx]
+            sample = self.lsl_data[sample_idx]
+
             # Time
             relative_time = sample.get('relative_time', 0.0)
-            self.lsl_table.setItem(i, 0, QTableWidgetItem(f"{relative_time:.3f}s"))
-            
-            # Stream name (from parsed structure)
+            self.lsl_table.setItem(row_idx, 0, QTableWidgetItem(f"{relative_time:.3f}s"))
+
+            # Stream name
             stream_name = sample.get('stream_name', 'Unknown')
-            self.lsl_table.setItem(i, 1, QTableWidgetItem(stream_name))
-            
-            # Channel and value
+            self.lsl_table.setItem(row_idx, 1, QTableWidgetItem(stream_name))
+
+            # Channel and value (reuse existing formatting logic)
             data = sample.get('data', [])
-            stream_name = sample.get('stream_name', '')
-            
+
             if stream_name == 'MadsPipeline_MouseTracking':
-                # Mouse tracking data: [x, y, event_type]
                 if isinstance(data, list) and len(data) >= 2:
                     x = float(data[0]) if len(data) > 0 else 0.0
                     y = float(data[1]) if len(data) > 1 else 0.0
                     event_type_val = data[2] if len(data) > 2 else 0
-                    # Decode event type
                     event_type_map = {0.0: 'position', 1.0: 'press', 2.0: 'release', 3.0: 'move', 4.0: 'scroll'}
                     event_type_str = event_type_map.get(event_type_val, f'unknown({event_type_val})')
-                    self.lsl_table.setItem(i, 2, QTableWidgetItem("Mouse"))
-                    # Display with precision - if values are 0-1 (normalized), show 3 decimals, otherwise show as integers
+                    self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Mouse"))
                     if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
-                        # Normalized coordinates (0-1 range)
-                        self.lsl_table.setItem(i, 3, QTableWidgetItem(f"({x:.3f}, {y:.3f}) - {event_type_str}"))
+                        self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(f"({x:.3f}, {y:.3f}) - {event_type_str}"))
                     else:
-                        # Absolute pixel coordinates
-                        self.lsl_table.setItem(i, 3, QTableWidgetItem(f"({x:.0f}, {y:.0f}) - {event_type_str}"))
+                        self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(f"({x:.0f}, {y:.0f}) - {event_type_str}"))
                 else:
-                    self.lsl_table.setItem(i, 2, QTableWidgetItem("Mouse"))
-                    self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data)[:50]))
+                    self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Mouse"))
+                    self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(str(data)[:200]))
             elif isinstance(data, list) and len(data) > 0:
-                # Show first channel value for other streams
-                self.lsl_table.setItem(i, 2, QTableWidgetItem("Ch 0"))
-                self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data[0])[:50]))
+                self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Ch 0"))
+                self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(str(data[0])[:200]))
             elif isinstance(data, dict):
-                # Bridge events might be stored as dict
-                self.lsl_table.setItem(i, 2, QTableWidgetItem("Event"))
-                self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data)[:50]))
+                self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Event"))
+                self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(str(data)[:200]))
             else:
-                self.lsl_table.setItem(i, 2, QTableWidgetItem("N/A"))
-                self.lsl_table.setItem(i, 3, QTableWidgetItem(str(data)[:50] if data else "N/A"))
+                self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("N/A"))
+                self.lsl_table.setItem(row_idx, 3, QTableWidgetItem(str(data)[:200] if data else "N/A"))
+
+        # Update page info and navigation buttons
+        self.lsl_page_info.setText(f"Showing {start+1}-{end} of {total_filtered} matching samples (page {self.lsl_page+1}/{max_page+1})")
+        self.lsl_prev_button.setEnabled(self.lsl_page > 0)
+        self.lsl_next_button.setEnabled(self.lsl_page < max_page)
+
+    def _apply_lsl_filter(self):
+        """Apply text filter to LSL data and reset to first page."""
+        try:
+            text = self.lsl_filter_edit.text().strip().lower() if hasattr(self, 'lsl_filter_edit') else ''
+            if not text:
+                # No filter: include all indices
+                self.lsl_filtered_indices = list(range(len(self.lsl_data)))
+            else:
+                filtered = []
+                for i, sample in enumerate(self.lsl_data):
+                    stream_name = str(sample.get('stream_name', '')).lower()
+                    data = sample.get('data', '')
+                    ts = sample.get('timestamp', '')
+                    hay = f"{stream_name} {str(data)} {str(ts)}".lower()
+                    if text in hay:
+                        filtered.append(i)
+                self.lsl_filtered_indices = filtered
+        except Exception as e:
+            print(f"[SessionReview] Error applying LSL filter: {e}")
+            self.lsl_filtered_indices = list(range(len(self.lsl_data)))
+
+        # Reset to first page and repopulate
+        self.lsl_page = 0
+        self._populate_lsl_table()
+
+    def _lsl_prev_page(self):
+        if not hasattr(self, 'lsl_page'):
+            self.lsl_page = 0
+        if self.lsl_page > 0:
+            self.lsl_page -= 1
+            self._populate_lsl_table()
+
+    def _lsl_next_page(self):
+        if not hasattr(self, 'lsl_filtered_indices'):
+            self.lsl_filtered_indices = list(range(len(self.lsl_data)))
+        page_size = self.lsl_page_size.value() if hasattr(self, 'lsl_page_size') else 100
+        max_page = max(0, (len(self.lsl_filtered_indices) - 1) // page_size)
+        if not hasattr(self, 'lsl_page'):
+            self.lsl_page = 0
+        if self.lsl_page < max_page:
+            self.lsl_page += 1
+            self._populate_lsl_table()
+
+    def _set_lsl_page(self, page: int):
+        self.lsl_page = max(0, int(page))
+        self._populate_lsl_table()
+
+    def _lsl_show_all(self):
+        # Set page size to include all filtered samples and refresh
+        total = len(self.lsl_filtered_indices) if hasattr(self, 'lsl_filtered_indices') else len(self.lsl_data)
+        if total <= 0:
+            return
+        try:
+            # Cap to avoid UI freeze on insane values
+            cap = max(1000000, total)
+            self.lsl_page_size.setValue(total)
+        except Exception:
+            pass
+        self.lsl_page = 0
+        self._populate_lsl_table()
     
     def _setup_playback(self):
         """Set up playback timer and controls."""
