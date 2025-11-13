@@ -101,7 +101,28 @@ class ProjectManager:
                 mouse_tracking=config.get('mouse_tracking', True) if config else True
             )
         elif project_type == ProjectType.EMBEDDED_WEBPAGE:
-            from .models import EmbeddedWebpageConfig
+            from .models import EmbeddedWebpageConfig, LSLConfig
+            # Load LSL config if available
+            lsl_config = None
+            if config and config.get('lsl_config'):
+                lsl_cfg = config['lsl_config']
+                lsl_config = LSLConfig(
+                    enable_mouse_tracking=lsl_cfg.get('enable_mouse_tracking', True),
+                    enable_marker_api=lsl_cfg.get('enable_marker_api', True),
+                    enable_tobii_eyetracker=lsl_cfg.get('enable_tobii_eyetracker', False),
+                    enable_emotibit=lsl_cfg.get('enable_emotibit', False),
+                    tobii_stream_name=lsl_cfg.get('tobii_stream_name'),
+                    emotibit_stream_name=lsl_cfg.get('emotibit_stream_name'),
+                    additional_stream_filters=lsl_cfg.get('additional_stream_filters', [])
+                )
+            else:
+                # Create default LSL config from legacy enable_marker_api flag
+                lsl_config = LSLConfig(
+                    enable_mouse_tracking=True,
+                    enable_marker_api=config.get('enable_marker_api', True) if config else True,
+                    enable_tobii_eyetracker=False,
+                    enable_emotibit=False
+                )
             embedded_webpage_config = EmbeddedWebpageConfig(
                 webpage_url=config.get('webpage_url') if config else None,
                 local_html_path=Path(config.get('local_html_path')) if config and config.get('local_html_path') else None,
@@ -110,7 +131,8 @@ class ProjectManager:
                 allow_external_links=config.get('allow_external_links', False) if config else False,
                 window_size=tuple(config['window_size']) if config and config.get('window_size') else None,
                 enforce_fullscreen=config.get('enforce_fullscreen', False) if config else False,
-                normalize_mouse_coordinates=config.get('normalize_mouse_coordinates', True) if config else True
+                normalize_mouse_coordinates=config.get('normalize_mouse_coordinates', True) if config else True,
+                lsl_config=lsl_config
             )
         
         # Create project instance

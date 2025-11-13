@@ -48,16 +48,29 @@ class ScreenRecordingConfig:
 
 
 @dataclass
+class LSLConfig:
+    """Configuration for LSL streams."""
+    enable_mouse_tracking: bool = True  # Enable mouse tracking LSL stream
+    enable_marker_api: bool = True  # Enable marker API LSL stream
+    enable_tobii_eyetracker: bool = False  # Enable Tobii eyetracker LSL stream
+    enable_emotibit: bool = False  # Enable Emotibit LSL stream
+    tobii_stream_name: Optional[str] = None  # Custom Tobii stream name filter
+    emotibit_stream_name: Optional[str] = None  # Custom Emotibit stream name filter
+    additional_stream_filters: List[str] = field(default_factory=list)  # Additional stream name filters to record
+
+
+@dataclass
 class EmbeddedWebpageConfig:
     """Configuration for embedded webpage projects."""
     webpage_url: Optional[str] = None
     local_html_path: Optional[Path] = None
-    enable_marker_api: bool = True
+    enable_marker_api: bool = True  # Deprecated: use lsl_config.enable_marker_api instead
     fullscreen: bool = True
     allow_external_links: bool = False
     window_size: Optional[tuple[int, int]] = None  # (width, height) - enforced window size for consistent data alignment
     enforce_fullscreen: bool = False  # If True, forces fullscreen mode (overrides window_size)
     normalize_mouse_coordinates: bool = True  # If True, mouse positions are normalized (0-1) relative to window size
+    lsl_config: Optional[LSLConfig] = None  # LSL stream configuration
 
 
 @dataclass
@@ -105,15 +118,27 @@ class Project:
                 'mouse_tracking': self.screen_recording_config.mouse_tracking
             }
         elif self.embedded_webpage_config:
+            lsl_config_data = None
+            if self.embedded_webpage_config.lsl_config:
+                lsl_config_data = {
+                    'enable_mouse_tracking': self.embedded_webpage_config.lsl_config.enable_mouse_tracking,
+                    'enable_marker_api': self.embedded_webpage_config.lsl_config.enable_marker_api,
+                    'enable_tobii_eyetracker': self.embedded_webpage_config.lsl_config.enable_tobii_eyetracker,
+                    'enable_emotibit': self.embedded_webpage_config.lsl_config.enable_emotibit,
+                    'tobii_stream_name': self.embedded_webpage_config.lsl_config.tobii_stream_name,
+                    'emotibit_stream_name': self.embedded_webpage_config.lsl_config.emotibit_stream_name,
+                    'additional_stream_filters': self.embedded_webpage_config.lsl_config.additional_stream_filters
+                }
             config_data['embedded_webpage'] = {
                 'webpage_url': self.embedded_webpage_config.webpage_url,
                 'local_html_path': str(self.embedded_webpage_config.local_html_path) if self.embedded_webpage_config.local_html_path else None,
-                'enable_marker_api': self.embedded_webpage_config.enable_marker_api,
+                'enable_marker_api': self.embedded_webpage_config.enable_marker_api,  # Legacy support
                 'fullscreen': self.embedded_webpage_config.fullscreen,
                 'allow_external_links': self.embedded_webpage_config.allow_external_links,
                 'window_size': self.embedded_webpage_config.window_size,
                 'enforce_fullscreen': self.embedded_webpage_config.enforce_fullscreen,
-                'normalize_mouse_coordinates': self.embedded_webpage_config.normalize_mouse_coordinates
+                'normalize_mouse_coordinates': self.embedded_webpage_config.normalize_mouse_coordinates,
+                'lsl_config': lsl_config_data
             }
         
         return {
@@ -169,15 +194,37 @@ class Project:
             )
         elif project_type == ProjectType.EMBEDDED_WEBPAGE and 'embedded_webpage' in config_data:
             config = config_data['embedded_webpage']
+            # Load LSL config if available
+            lsl_config = None
+            if config.get('lsl_config'):
+                lsl_cfg = config['lsl_config']
+                lsl_config = LSLConfig(
+                    enable_mouse_tracking=lsl_cfg.get('enable_mouse_tracking', True),
+                    enable_marker_api=lsl_cfg.get('enable_marker_api', True),
+                    enable_tobii_eyetracker=lsl_cfg.get('enable_tobii_eyetracker', False),
+                    enable_emotibit=lsl_cfg.get('enable_emotibit', False),
+                    tobii_stream_name=lsl_cfg.get('tobii_stream_name'),
+                    emotibit_stream_name=lsl_cfg.get('emotibit_stream_name'),
+                    additional_stream_filters=lsl_cfg.get('additional_stream_filters', [])
+                )
+            else:
+                # Create default LSL config from legacy enable_marker_api flag
+                lsl_config = LSLConfig(
+                    enable_mouse_tracking=True,
+                    enable_marker_api=config.get('enable_marker_api', True),
+                    enable_tobii_eyetracker=False,
+                    enable_emotibit=False
+                )
             embedded_webpage_config = EmbeddedWebpageConfig(
                 webpage_url=config.get('webpage_url'),
                 local_html_path=Path(config['local_html_path']) if config.get('local_html_path') else None,
-                enable_marker_api=config.get('enable_marker_api', True),
+                enable_marker_api=config.get('enable_marker_api', True),  # Legacy support
                 fullscreen=config.get('fullscreen', True),
                 allow_external_links=config.get('allow_external_links', False),
                 window_size=tuple(config['window_size']) if config.get('window_size') else None,
                 enforce_fullscreen=config.get('enforce_fullscreen', False),
-                normalize_mouse_coordinates=config.get('normalize_mouse_coordinates', True)
+                normalize_mouse_coordinates=config.get('normalize_mouse_coordinates', True),
+                lsl_config=lsl_config
             )
         
         return cls(
