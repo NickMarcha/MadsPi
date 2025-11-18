@@ -2,9 +2,10 @@
 Project management functionality for MadsPipeline.
 """
 import json
+import csv
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 import shutil
 
 # Import local modules using relative imports
@@ -55,8 +56,7 @@ class ProjectManager:
         # Create project directory structure
         project_path.mkdir(parents=True, exist_ok=True)
         (project_path / "sessions").mkdir(exist_ok=True)
-        # Note: recordings folder removed - recordings are now stored in tracking_data/{session_id}/
-        (project_path / "tracking_data").mkdir(exist_ok=True)
+        # Note: All session data (including recordings) is now stored in sessions/{session_id}/
         (project_path / "exports").mkdir(exist_ok=True)
         
         # Create type-specific subdirectories
@@ -144,7 +144,8 @@ class ProjectManager:
             created_date=now,
             modified_date=now,
             project_path=project_path,
-            sessions=[],
+            sessions=[],  # Not used - sessions scanned from filesystem
+            version="1.0",  # Current project structure version
             picture_slideshow_config=picture_slideshow_config,
             video_config=video_config,
             screen_recording_config=screen_recording_config,
@@ -176,6 +177,25 @@ class ProjectManager:
             data = json.load(f)
         
         project = Project.from_dict(data)
+        
+        # Check if migration is needed (but don't run migrations automatically)
+        from .migrations import CURRENT_VERSION
+        if project.version != CURRENT_VERSION:
+            print(f"Note: Project '{project.name}' is version {project.version}, "
+                  f"current version is {CURRENT_VERSION}. Migration may be needed.")
+        
+        # Scan sessions folder to find all sessions (instead of using project.sessions list)
+        sessions_dir = project_path / "sessions"
+        if sessions_dir.exists():
+            found_sessions = []
+            for session_dir in sessions_dir.iterdir():
+                if session_dir.is_dir():
+                    session_file = session_dir / "session.json"
+                    if session_file.exists():
+                        found_sessions.append(session_dir.name)
+            # Update project sessions list from filesystem
+            project.sessions = sorted(found_sessions)
+        
         self.current_project = project
         return project
     
@@ -228,15 +248,27 @@ class ProjectManager:
             created_date=now
         )
         
-        # Add session to project
-        project.sessions.append(session_id)
+        # Note: We don't add to project.sessions list anymore - it's scanned from filesystem on load
         project.modified_date = now
         
         # Save session metadata
         self._save_session_metadata(project, session)
+        # Update project metadata (but don't save sessions list - it's derived from filesystem)
         self._save_project_metadata(project)
         
         return session
+    
+    def _get_session_dir(self, project: Project, session: Session) -> Path:
+        """Get the session directory path.
+        
+        Args:
+            project: Project instance
+            session: Session instance
+            
+        Returns:
+            Path to session directory (sessions/{session_id}/)
+        """
+        return project.project_path / "sessions" / session.session_id
     
     def save_tracking_data(self, project: Project, session: Session, tracking_data: TrackingData) -> None:
         """Save tracking data for a session.
@@ -246,21 +278,16 @@ class ProjectManager:
             session: Session instance
             tracking_data: Tracking data to save
         """
-        tracking_dir = project.project_path / "tracking_data" / session.session_id
-        tracking_dir.mkdir(exist_ok=True)
+        session_dir = self._get_session_dir(project, session)
+        session_dir.mkdir(parents=True, exist_ok=True)
         
         # Save individual tracking data point
         timestamp_str = tracking_data.timestamp.strftime("%Y%m%d_%H%M%S_%f")
         filename = f"tracking_{timestamp_str}.json"
-        filepath = tracking_dir / filename
+        filepath = session_dir / filename
         
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(tracking_data.to_dict(), f, indent=2)
-        
-        # Update session tracking data path if not set
-        if session.tracking_data_path is None:
-            session.tracking_data_path = tracking_dir
-            self._save_session_metadata(project, session)
     
     def save_marker(self, project: Project, session: Session, marker: Marker) -> None:
         """Save a marker for a session.
@@ -276,17 +303,147 @@ class ProjectManager:
         # Save updated session metadata
         self._save_session_metadata(project, session)
     
-    def export_project_data(self, project: Project, export_format: str = "json") -> Path:
-        """Export complete project dataset.
+    def _load_session_lsl_data(self, session: Session, project: Optional[Project] = None) -> Optional[Dict[str, Any]]:
+        """Load LSL recording data for a session.
+        
+        Args:
+            session: Session instance
+            project: Project instance (required)
+            
+        Returns:
+            LSL data dictionary or None if not found
+        """
+        if not project:
+            return None
+        
+        session_dir = self._get_session_dir(project, session)
+        lsl_file = session_dir / f"lsl_recording_{session.session_id}.json"
+        
+        if not lsl_file.exists():
+            return None
+        
+        try:
+            with open(lsl_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading LSL data for session {session.session_id}: {e}")
+            return None
+    
+    def _load_session_video_info(self, session: Session, project: Optional[Project] = None) -> Optional[Dict[str, Any]]:
+        """Load video recording info for a session.
+        
+        Args:
+            session: Session instance
+            project: Project instance (required)
+            
+        Returns:
+            Video info dictionary or None if not found
+        """
+        if not project:
+            return None
+        
+        session_dir = self._get_session_dir(project, session)
+        info_file = session_dir / f"screen_recording_info_{session.session_id}.json"
+        
+        if not info_file.exists():
+            return None
+        
+        try:
+            with open(info_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading video info for session {session.session_id}: {e}")
+            return None
+    
+    def export_session_data(self, project: Project, session: Session, 
+                           export_format: str = "json",
+                           include_columns: Optional[List[str]] = None) -> Path:
+        """Export a single session's data.
         
         Args:
             project: Project instance
+            session: Session instance to export
             export_format: Export format ("json" or "csv")
+            include_columns: For CSV, list of columns to include (None = all)
             
         Returns:
             Path to exported file
         """
         export_dir = project.project_path / "exports"
+        export_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        if export_format.lower() == "json":
+            filename = f"{project.name}_session_{session.session_id}_export_{timestamp}.json"
+            filepath = export_dir / filename
+            
+            # Load LSL data
+            lsl_data = self._load_session_lsl_data(session, project)
+            
+            # Load video info
+            video_info = self._load_session_video_info(session, project)
+            
+            export_data = {
+                'export_type': 'session',
+                'export_timestamp': datetime.now().isoformat(),
+                'session': session.to_dict(),
+                'lsl_data': lsl_data,
+                'video_info': video_info
+            }
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2)
+        
+        elif export_format.lower() == "csv":
+            filename = f"{project.name}_session_{session.session_id}_export_{timestamp}.csv"
+            filepath = export_dir / filename
+            
+            # Load LSL data
+            lsl_data = self._load_session_lsl_data(session, project)
+            
+            if not lsl_data or 'lsl_samples' not in lsl_data:
+                raise ValueError(f"No LSL data found for session {session.session_id}")
+            
+            # Flatten LSL samples to CSV rows
+            rows = self._lsl_samples_to_csv_rows(lsl_data['lsl_samples'], 
+                                                 session_id=session.session_id,
+                                                 session_name=session.name,
+                                                 include_columns=include_columns)
+            
+            if not rows:
+                raise ValueError(f"No data rows to export for session {session.session_id}")
+            
+            # Collect all possible fieldnames from all rows
+            all_fieldnames = set()
+            for row in rows:
+                all_fieldnames.update(row.keys())
+            fieldnames = sorted(all_fieldnames)
+            
+            # Write CSV
+            with open(filepath, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+        
+        else:
+            raise ValueError(f"Unsupported export format: {export_format}")
+        
+        return filepath
+    
+    def export_project_data(self, project: Project, export_format: str = "json",
+                           include_columns: Optional[List[str]] = None) -> Path:
+        """Export complete project dataset (all sessions).
+        
+        Args:
+            project: Project instance
+            export_format: Export format ("json" or "csv")
+            include_columns: For CSV, list of columns to include (None = all)
+            
+        Returns:
+            Path to exported file
+        """
+        export_dir = project.project_path / "exports"
+        export_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         if export_format.lower() == "json":
@@ -294,33 +451,177 @@ class ProjectManager:
             filepath = export_dir / filename
             
             export_data = {
+                'export_type': 'project',
+                'export_timestamp': datetime.now().isoformat(),
                 'project': project.to_dict(),
-                'sessions': [],
-                'tracking_data': []
+                'sessions': []
             }
             
             # Load all sessions and their data
             for session_id in project.sessions:
                 session = self._load_session_metadata(project, session_id)
                 if session:
-                    export_data['sessions'].append(session.to_dict())
-                    
-                    # Load tracking data if available
-                    if session.tracking_data_path:
-                        tracking_data = self._load_session_tracking_data(session)
-                        export_data['tracking_data'].extend([td.to_dict() for td in tracking_data])
+                    session_export = {
+                        'session': session.to_dict(),
+                        'lsl_data': self._load_session_lsl_data(session, project),
+                        'video_info': self._load_session_video_info(session, project)
+                    }
+                    export_data['sessions'].append(session_export)
             
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2)
         
         elif export_format.lower() == "csv":
-            # TODO: Implement CSV export
-            raise NotImplementedError("CSV export not yet implemented")
+            filename = f"{project.name}_export_{timestamp}.csv"
+            filepath = export_dir / filename
+            
+            all_rows = []
+            
+            # Load all sessions and their data
+            for session_id in project.sessions:
+                session = self._load_session_metadata(project, session_id)
+                if session:
+                    lsl_data = self._load_session_lsl_data(session, project)
+                    if lsl_data and 'lsl_samples' in lsl_data:
+                        rows = self._lsl_samples_to_csv_rows(lsl_data['lsl_samples'],
+                                                             session_id=session.session_id,
+                                                             session_name=session.name,
+                                                             include_columns=include_columns)
+                        all_rows.extend(rows)
+            
+            if not all_rows:
+                raise ValueError(f"No data rows to export for project {project.name}")
+            
+            # Collect all possible fieldnames from all rows
+            all_fieldnames = set()
+            for row in all_rows:
+                all_fieldnames.update(row.keys())
+            fieldnames = sorted(all_fieldnames)
+            
+            # Write CSV
+            with open(filepath, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(all_rows)
         
         else:
             raise ValueError(f"Unsupported export format: {export_format}")
         
         return filepath
+    
+    def _flatten_dict(self, d: Dict[str, Any], prefix: str = '') -> Dict[str, Any]:
+        """Recursively flatten a nested dictionary.
+        
+        Args:
+            d: Dictionary to flatten
+            prefix: Prefix for nested keys (e.g., 'data_' for nested data)
+            
+        Returns:
+            Flattened dictionary with keys like 'data_key' or 'data_nested_key'
+        """
+        flattened = {}
+        for key, value in d.items():
+            new_key = f"{prefix}{key}" if prefix else key
+            
+            if isinstance(value, dict):
+                # Recursively flatten nested dictionaries
+                nested = self._flatten_dict(value, prefix=f"{new_key}_")
+                flattened.update(nested)
+            elif isinstance(value, list):
+                # For lists, convert to string or handle special cases
+                if len(value) == 0:
+                    flattened[new_key] = ''
+                elif all(isinstance(item, (int, float)) for item in value):
+                    # Numeric list - keep as is for now, will be handled separately
+                    flattened[new_key] = value
+                else:
+                    # Mixed or complex list - convert to JSON string
+                    flattened[new_key] = json.dumps(value)
+            else:
+                # Scalar value
+                flattened[new_key] = value
+        
+        return flattened
+    
+    def _lsl_samples_to_csv_rows(self, lsl_samples: List[Dict[str, Any]],
+                                 session_id: str, session_name: str,
+                                 include_columns: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Convert LSL samples to CSV rows.
+        
+        Args:
+            lsl_samples: List of LSL sample dictionaries
+            session_id: Session ID to include in rows
+            session_name: Session name to include in rows
+            include_columns: List of columns to include (None = all)
+            
+        Returns:
+            List of dictionaries suitable for CSV export
+        """
+        rows = []
+        
+        for sample in lsl_samples:
+            row = {
+                'session_id': session_id,
+                'session_name': session_name,
+                'timestamp': sample.get('timestamp'),
+                'relative_time': sample.get('relative_time'),
+                'stream_name': sample.get('stream_name', ''),
+                'stream_type': sample.get('stream_type', ''),
+                'clock_offset': sample.get('clock_offset'),
+                'local_time_when_recorded': sample.get('local_time_when_recorded')
+            }
+            
+            # Handle data field - can be various types
+            data = sample.get('data', {})
+            
+            # If data is a dict (parsed JSON from bridge events), flatten it
+            if isinstance(data, dict):
+                # Add common event fields first
+                row['event_type'] = data.get('type', '')
+                row['wall_clock'] = data.get('wall_clock', '')
+                
+                # Get nested 'data' field if it exists and flatten it
+                nested_data = data.get('data', {})
+                if isinstance(nested_data, dict) and nested_data:
+                    # Flatten nested data with 'data_' prefix
+                    flattened_nested = self._flatten_dict(nested_data, prefix='data_')
+                    row.update(flattened_nested)
+                
+                # Add any other top-level keys from data (excluding already handled ones)
+                for key, value in data.items():
+                    if key not in ['type', 'data', 'wall_clock', 'timestamp', 'lsl_timestamp']:
+                        # Flatten if it's a dict, otherwise add directly
+                        if isinstance(value, dict):
+                            flattened_value = self._flatten_dict(value, prefix=f'{key}_')
+                            row.update(flattened_value)
+                        else:
+                            row[f'data_{key}'] = value
+            elif isinstance(data, list):
+                # Numeric data (mouse tracking, etc.)
+                # Convert list to comma-separated string or individual columns
+                if len(data) == 1:
+                    row['data_value'] = data[0]
+                elif len(data) == 2:
+                    row['data_x'] = data[0]
+                    row['data_y'] = data[1]
+                elif len(data) == 3:
+                    row['data_x'] = data[0]
+                    row['data_y'] = data[1]
+                    row['data_z'] = data[2]
+                else:
+                    # For longer arrays, store as JSON string
+                    row['data_array'] = json.dumps(data)
+            else:
+                # Scalar or other type
+                row['data_value'] = str(data)
+            
+            # Filter columns if requested
+            if include_columns:
+                row = {k: v for k, v in row.items() if k in include_columns}
+            
+            rows.append(row)
+        
+        return rows
     
     def delete_project(self, project: Project) -> None:
         """Delete a project and all its data.
@@ -401,22 +702,22 @@ class ProjectManager:
             print(f"Error loading session {session_id}: {e}")
             return None
     
-    def _load_session_tracking_data(self, session: Session) -> List[TrackingData]:
+    def _load_session_tracking_data(self, session: Session, project: Project) -> List[TrackingData]:
         """Load all tracking data for a session.
         
         Args:
             session: Session instance
+            project: Project instance
             
         Returns:
             List of tracking data instances
         """
         tracking_data = []
         
-        if not session.tracking_data_path:
-            return tracking_data
+        session_dir = self._get_session_dir(project, session)
         
         try:
-            for data_file in session.tracking_data_path.glob("tracking_*.json"):
+            for data_file in session_dir.glob("tracking_*.json"):
                 with open(data_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 tracking_data.append(TrackingData.from_dict(data))
@@ -444,14 +745,10 @@ class ProjectManager:
                 project.modified_date = datetime.now()
                 
                 # Delete session directory and all its contents
+                # All session data (including recordings) is in sessions/{session_id}/
                 session_dir = project.project_path / "sessions" / session_id
                 if session_dir.exists():
                     shutil.rmtree(session_dir)
-                
-                # Delete tracking data directory
-                tracking_dir = project.project_path / "tracking_data" / session_id
-                if tracking_dir.exists():
-                    shutil.rmtree(tracking_dir)
                 
                 # Save updated project metadata
                 self._save_project_metadata(project)

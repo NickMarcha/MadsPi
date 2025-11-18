@@ -82,7 +82,8 @@ class Project:
     created_date: datetime
     modified_date: datetime
     project_path: Path
-    sessions: List[str] = field(default_factory=list)  # List of session IDs
+    sessions: List[str] = field(default_factory=list)  # List of session IDs (deprecated: scanned from filesystem)
+    version: str = "1.0"  # Project structure version for future migrations
     
     # Type-specific configuration
     picture_slideshow_config: Optional[PictureSlideshowConfig] = None
@@ -148,7 +149,8 @@ class Project:
             'created_date': self.created_date.isoformat(),
             'modified_date': self.modified_date.isoformat(),
             'project_path': str(self.project_path),
-            'sessions': self.sessions,
+            'sessions': self.sessions,  # Kept for backward compatibility, but not used on load
+            'version': self.version,
             'config': config_data
         }
     
@@ -234,7 +236,8 @@ class Project:
             created_date=datetime.fromisoformat(data['created_date']),
             modified_date=datetime.fromisoformat(data['modified_date']),
             project_path=Path(data['project_path']),
-            sessions=data.get('sessions', []),
+            sessions=data.get('sessions', []),  # Loaded but ignored - sessions scanned from filesystem
+            version=data.get('version', '1.0'),  # Default to 1.0 for old projects
             picture_slideshow_config=picture_slideshow_config,
             video_config=video_config,
             screen_recording_config=screen_recording_config,
@@ -244,14 +247,18 @@ class Project:
 
 @dataclass
 class Session:
-    """Represents a recording session."""
+    """Represents a recording session.
+    
+    Note: All session data (including recordings and LSL data) is stored in
+    sessions/{session_id}/. The tracking_data_path field has been removed
+    as it's redundant - the path is always sessions/{session_id}/.
+    """
     session_id: str
     name: str
     created_date: datetime
     modified_date: datetime = field(default_factory=datetime.now)
     duration: Optional[float] = None  # Duration in seconds
-    recording_path: Optional[Path] = None
-    tracking_data_path: Optional[Path] = None
+    recording_path: Optional[Path] = None  # Legacy field, kept for backward compatibility
     markers: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -263,13 +270,13 @@ class Session:
             'modified_date': self.modified_date.isoformat(),
             'duration': self.duration,
             'recording_path': str(self.recording_path) if self.recording_path else None,
-            'tracking_data_path': str(self.tracking_data_path) if self.tracking_data_path else None,
             'markers': self.markers
         }
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Session':
         """Create session from dictionary."""
+        # Handle backward compatibility: ignore tracking_data_path if present
         return cls(
             session_id=data['session_id'],
             name=data['name'],
@@ -277,7 +284,6 @@ class Session:
             modified_date=datetime.fromisoformat(data.get('modified_date', data['created_date'])),
             duration=data.get('duration'),
             recording_path=Path(data['recording_path']) if data.get('recording_path') else None,
-            tracking_data_path=Path(data['tracking_data_path']) if data.get('tracking_data_path') else None,
             markers=data.get('markers', [])
         )
 

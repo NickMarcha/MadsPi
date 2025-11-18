@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QSlider, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem,
-    QApplication, QToolTip
+    QApplication, QToolTip, QRadioButton, QButtonGroup
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QUrl, QPointF, QRectF
 from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPen, QBrush, QPainter, QWheelEvent, QCursor
@@ -1732,7 +1732,8 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             )
         
         # Create output directory
-        tracking_dir = self.project.project_path / "tracking_data" / self.session.session_id
+        # All session data is now in sessions/{session_id}/
+        tracking_dir = self.project.project_path / "sessions" / self.session.session_id
         
         try:
             # Create a callback to send sync events through LSL streamer when recording starts
@@ -1993,7 +1994,8 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     def _save_session_data(self):
         """Save session LSL recorded data (all data goes through LSL)."""
         # Create tracking data directory
-        tracking_dir = self.project.project_path / "tracking_data" / self.session.session_id
+        # All session data is now in sessions/{session_id}/
+        tracking_dir = self.project.project_path / "sessions" / self.session.session_id
         tracking_dir.mkdir(parents=True, exist_ok=True)
         
         # Save recording metadata (for precise video-event alignment)
@@ -2009,7 +2011,8 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         # Save LSL recorded data (this is the comprehensive record with all streams)
         # All data (bridge events, mouse tracking, etc.) goes through LSL
-        lsl_file = tracking_dir / "lsl_recorded_data.json"
+        # Use consistent naming: lsl_recording_{session_id}.json (matches README)
+        lsl_file = tracking_dir / f"lsl_recording_{self.session.session_id}.json"
         sample_count = 0
         
         if self.lsl_recorder:
@@ -2048,21 +2051,111 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         else:
             print(f"Warning: LSL recorder is None, cannot save LSL data")
         
-        # Update session metadata
-        self.session.tracking_data_path = tracking_dir
+        # Update session metadata (tracking_data_path removed - always sessions/{session_id}/)
         self.session.modified_date = datetime.now()
         
-        # Save session metadata
-        session_file = self.project.project_path / "sessions" / f"{self.session.session_id}.json"
-        session_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(session_file, 'w', encoding='utf-8') as f:
-            json.dump(self.session.to_dict(), f, indent=2)
+        # Save session metadata using project_manager for consistency
+        # This ensures we use the same location as project_manager._save_session_metadata
+        from .project_manager import ProjectManager
+        project_manager = ProjectManager()
+        project_manager._save_session_metadata(self.project, self.session)
     
     def closeEvent(self, event):
         """Handle window close event."""
         self._end_session()
         event.accept()
+
+
+class ExportDataDialog(QDialog):
+    """Dialog for exporting session or project data."""
+    
+    def __init__(self, project: Project, session: Optional[Session] = None, parent=None):
+        super().__init__(parent)
+        self.project = project
+        self.session = session
+        self.setWindowTitle("Export Data")
+        self.setModal(True)
+        self.setMinimumWidth(400)
+        
+        self.export_format = "json"
+        self.export_level = "session" if session else "project"
+        
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        """Set up the export dialog UI."""
+        layout = QVBoxLayout()
+        
+        # Export level selection (only if session is provided)
+        if self.session:
+            level_group = QGroupBox("Export Level")
+            level_layout = QVBoxLayout()
+            
+            self.level_button_group = QButtonGroup()
+            self.session_radio = QRadioButton(f"Export Session: {self.session.name}")
+            self.session_radio.setChecked(True)
+            self.project_radio = QRadioButton("Export Entire Project (All Sessions)")
+            self.project_radio.setChecked(False)
+            
+            self.level_button_group.addButton(self.session_radio, 0)
+            self.level_button_group.addButton(self.project_radio, 1)
+            
+            level_layout.addWidget(self.session_radio)
+            level_layout.addWidget(self.project_radio)
+            level_group.setLayout(level_layout)
+            layout.addWidget(level_group)
+        else:
+            # No session provided, only project export available
+            self.session_radio = None
+            self.project_radio = None
+            self.level_button_group = None
+        
+        # Export format selection
+        format_group = QGroupBox("Export Format")
+        format_layout = QVBoxLayout()
+        
+        self.format_button_group = QButtonGroup()
+        self.json_radio = QRadioButton("JSON (Full structure)")
+        self.json_radio.setChecked(True)
+        self.csv_radio = QRadioButton("CSV (Tabular data)")
+        self.csv_radio.setChecked(False)
+        
+        self.format_button_group.addButton(self.json_radio, 0)
+        self.format_button_group.addButton(self.csv_radio, 1)
+        
+        format_layout.addWidget(self.json_radio)
+        format_layout.addWidget(self.csv_radio)
+        format_group.setLayout(format_layout)
+        layout.addWidget(format_group)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        self.export_button = QPushButton("Export")
+        self.export_button.clicked.connect(self.accept)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addStretch()
+        button_layout.addWidget(self.export_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def get_export_options(self) -> Dict[str, Any]:
+        """Get export options from dialog.
+        
+        Returns:
+            Dictionary with export_level, export_format, and session (if applicable)
+        """
+        export_level = "session" if (self.session_radio and self.session_radio.isChecked()) else "project"
+        export_format = "csv" if self.csv_radio.isChecked() else "json"
+        
+        return {
+            'export_level': export_level,
+            'export_format': export_format,
+            'session': self.session if export_level == "session" else None
+        }
 
 
 class SessionCreationDialog(QDialog):
@@ -2229,11 +2322,8 @@ class SessionSelectionDialog(QDialog):
             self.review_button.setEnabled(True)
             
             # Check if video file exists
-            tracking_dir = None
-            if session.tracking_data_path:
-                tracking_dir = session.tracking_data_path
-            else:
-                tracking_dir = self.project.project_path / "tracking_data" / session.session_id
+            # All session data is now in sessions/{session_id}/
+            tracking_dir = self.project.project_path / "sessions" / session.session_id
             
             video_file = tracking_dir / f"screen_recording_{session.session_id}.mp4"
             if not video_file.exists():
@@ -2265,11 +2355,8 @@ class SessionSelectionDialog(QDialog):
         session = selected_items[0].data(Qt.ItemDataRole.UserRole)
         
         # Find video file
-        tracking_dir = None
-        if session.tracking_data_path:
-            tracking_dir = session.tracking_data_path
-        else:
-            tracking_dir = self.project.project_path / "tracking_data" / session.session_id
+        # All session data is now in sessions/{session_id}/
+        tracking_dir = self.project.project_path / "sessions" / session.session_id
         
         video_file = tracking_dir / f"screen_recording_{session.session_id}.mp4"
         if not video_file.exists():
@@ -2330,21 +2417,15 @@ class SessionReviewWindow(QMainWindow):
     def _load_session_data(self):
         """Load tracking data and LSL data for the session."""
         # Try to find tracking data directory
-        tracking_dir = None
-        
-        # First, try using session.tracking_data_path if set
-        if self.session.tracking_data_path:
-            tracking_dir = self.session.tracking_data_path
-        else:
-            # Fallback: construct path from project and session ID
-            tracking_dir = self.project.project_path / "tracking_data" / self.session.session_id
+        # All session data is now in sessions/{session_id}/
+        tracking_dir = self.project.project_path / "sessions" / self.session.session_id
         
         print(f"[SessionReview] Looking for LSL data in: {tracking_dir}")
         
-        # Load lsl_recorded_data.json (all data is in LSL, no separate tracking_data.json)
+        # Load lsl_recording_{session_id}.json (all data is in LSL, no separate tracking_data.json)
         if tracking_dir and tracking_dir.exists():
-            # Load lsl_recorded_data.json
-            lsl_file = tracking_dir / "lsl_recorded_data.json"
+            # Load lsl_recording_{session_id}.json (consistent naming)
+            lsl_file = tracking_dir / f"lsl_recording_{self.session.session_id}.json"
             print(f"[SessionReview] Checking for LSL file: {lsl_file}")
             lsl_session_start_time = None  # Will extract from LSL metadata
             if lsl_file.exists():
@@ -3888,12 +3969,41 @@ class MainWindow(QMainWindow):
     
     def _on_export_data(self):
         """Handle export data request."""
+        # Check if we have a selected session from review window
+        selected_session = None
+        if hasattr(self, 'session_review_window') and self.session_review_window:
+            if hasattr(self.session_review_window, 'session'):
+                selected_session = self.session_review_window.session
+        
+        # Show export dialog
+        dialog = ExportDataDialog(self.current_project, selected_session, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        options = dialog.get_export_options()
+        
         try:
-            export_path = self.project_manager.export_project_data(self.current_project)
-            QMessageBox.information(
-                self, "Success", 
-                f"Project data exported successfully to:\n{export_path}"
-            )
+            if options['export_level'] == "session" and options['session']:
+                # Export single session
+                export_path = self.project_manager.export_session_data(
+                    self.current_project,
+                    options['session'],
+                    export_format=options['export_format']
+                )
+                QMessageBox.information(
+                    self, "Success", 
+                    f"Session data exported successfully to:\n{export_path}"
+                )
+            else:
+                # Export entire project
+                export_path = self.project_manager.export_project_data(
+                    self.current_project,
+                    export_format=options['export_format']
+                )
+                QMessageBox.information(
+                    self, "Success", 
+                    f"Project data exported successfully to:\n{export_path}"
+                )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to export data: {e}")
     
