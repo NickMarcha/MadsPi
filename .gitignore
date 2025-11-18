@@ -64,6 +64,9 @@ output/
 # Experiment results
 results/
 
+# Debug data folder used for local test captures
+debug data/
+
 
 # Environment Variables
 # Environment variables (API keys, etc.)
