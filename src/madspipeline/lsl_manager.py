@@ -50,6 +50,8 @@ class LSLStreamManagerDialog(QDialog):
                 enable_tobii_eyetracker=False,
                 enable_emotibit=False
             )
+        # Tracks streams selected for recording in the UI
+        self.selected_streams = set()
         
         self.setWindowTitle(f"LSL Stream Management - {project.name}")
         self.setMinimumSize(800, 600)
@@ -169,8 +171,9 @@ class LSLStreamManagerDialog(QDialog):
         test_layout.addWidget(streams_label)
         
         self.streams_table = QTableWidget()
-        self.streams_table.setColumnCount(5)
-        self.streams_table.setHorizontalHeaderLabels(["Name", "Type", "Channels", "Sample Rate", "Source ID"])
+        # Add a 'Record' checkbox column for per-stream selection
+        self.streams_table.setColumnCount(6)
+        self.streams_table.setHorizontalHeaderLabels(["Record", "Name", "Type", "Channels", "Sample Rate", "Source ID"])
         self.streams_table.horizontalHeader().setStretchLastSection(True)
         self.streams_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.streams_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -244,6 +247,13 @@ class LSLStreamManagerDialog(QDialog):
             self.emotibit_stream_edit.setText(self.current_config.emotibit_stream_name)
         else:
             self.emotibit_stream_edit.clear()
+
+        # Pre-load any previously selected stream filters
+        if self.current_config.additional_stream_filters:
+            try:
+                self.selected_streams = set(self.current_config.additional_stream_filters)
+            except Exception:
+                self.selected_streams = set()
     
     def _on_config_changed(self):
         """Handle configuration changes."""
@@ -271,15 +281,29 @@ class LSLStreamManagerDialog(QDialog):
             self.streams_table.setRowCount(len(streams))
             
             for i, stream in enumerate(streams):
-                self.streams_table.setItem(i, 0, QTableWidgetItem(stream.name()))
-                self.streams_table.setItem(i, 1, QTableWidgetItem(stream.type()))
-                self.streams_table.setItem(i, 2, QTableWidgetItem(str(stream.channel_count())))
-                
+                stream_name = stream.name()
+                # Checkbox to indicate recording this stream
+                record_cb = QCheckBox()
+                record_cb.setChecked(stream_name in (self.current_config.additional_stream_filters or []))
+
+                def _cb_state_changed(state, name=stream_name):
+                    if state == Qt.CheckState.Checked:
+                        self.selected_streams.add(name)
+                    else:
+                        self.selected_streams.discard(name)
+
+                record_cb.stateChanged.connect(_cb_state_changed)
+                self.streams_table.setCellWidget(i, 0, record_cb)
+
+                self.streams_table.setItem(i, 1, QTableWidgetItem(stream_name))
+                self.streams_table.setItem(i, 2, QTableWidgetItem(stream.type()))
+                self.streams_table.setItem(i, 3, QTableWidgetItem(str(stream.channel_count())))
+
                 sample_rate = stream.nominal_srate()
                 sample_rate_str = f"{sample_rate:.1f} Hz" if sample_rate > 0 else "Irregular"
-                self.streams_table.setItem(i, 3, QTableWidgetItem(sample_rate_str))
-                
-                self.streams_table.setItem(i, 4, QTableWidgetItem(stream.source_id()))
+                self.streams_table.setItem(i, 4, QTableWidgetItem(sample_rate_str))
+
+                self.streams_table.setItem(i, 5, QTableWidgetItem(stream.source_id()))
             
             # Resize columns to content
             self.streams_table.resizeColumnsToContents()
@@ -390,6 +414,12 @@ class LSLStreamManagerDialog(QDialog):
         """Save the configuration."""
         # Update config from UI
         self._on_config_changed()
+        # Persist selected streams into additional_stream_filters so recording will include them
+        try:
+            self.current_config.additional_stream_filters = list(self.selected_streams)
+        except Exception:
+            # Fallback: leave as-is
+            pass
         
         # Emit signal
         self.config_changed.emit(self.current_config)

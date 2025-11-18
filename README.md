@@ -424,6 +424,15 @@ tracking_data/{project_id}/sessions/{session_id}/
 - [ ] Add folder navigation for session data
 - [ ] Improve project overview card layout
 
+**Logging (New)**
+- Application output (both logging and redirected stdout/stderr) is written to a `logs/` folder at the repository root.
+- Each run creates a timestamped log file named `madspipeline_YYYYMMDD_HHMMSS.log` which contains console messages and any `print()` output.
+- The `logs/` folder is included in `.gitignore` to prevent runtime logs from being committed.
+
+**LSL Manager Overhaul (Updates)**
+- The LSL Stream Manager UI now includes a per-stream "Record" checkbox so you can explicitly select which available LSL streams should be recorded.
+- Selected streams are stored in the project `embedded_webpage` LSL configuration under `additional_stream_filters` so the recorder can respect user choices during sessions.
+
 **Project File Structure Review** ⏳ Priority: MEDIUM
 - [ ] Audit current tracking_data directory layout for redundancy
 - [ ] Identify and consolidate duplicate data files
