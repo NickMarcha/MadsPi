@@ -343,10 +343,108 @@ tracking_data/{project_id}/sessions/{session_id}/
 
 ---
 
-## References
+## Development Roadmap
 
-- **AI Agent Guidelines:** `.github/copilot-instructions.md` - Comprehensive architecture & patterns for AI coding agents
-- **[MadsBridge Documentation](docs/MadsBridge.MD)** - HTML bridge implementation details
+### Completed (✅ Phase 1-2)
+
+**Project Structure & Data Management**
+- ✅ Project folder structure system
+- ✅ Project metadata storage and configuration
+- ✅ Project type system (Picture Slideshow, Video, Screen Recording, Embedded Webpage)
+- ✅ Sessions folder organization
+- ✅ Session management and metadata
+
+**Main Application GUI**
+- ✅ Main application window with PySide6
+- ✅ Project selection startup screen
+- ✅ Dashboard with session/project management
+- ✅ Project editing dialog
+- ✅ Debug session window with live tracking
+
+**Mouse Tracking System**
+- ✅ Real-time mouse coordinate capture
+- ✅ Mouse click events (left, right, middle)
+- ✅ Mouse scroll events
+- ✅ Extensible tracking data format (JSON)
+- ✅ Debug visualization with movement trails
+
+**LSL Integration (Phase 1-2 ✅)**
+- ✅ HTML-to-Python bridge via QWebChannel
+- ✅ LSL stream outlet for bridge events
+- ✅ Bridge event streaming to LSL in real-time
+- ✅ LSL stream recording during sessions
+- ✅ Clock synchronization (local_clock vs wall_clock)
+- ✅ Clock offset measurement per sample
+- ✅ Video recording with sync marker events
+
+**Technical Infrastructure**
+- ✅ Data models (Project, Session, Config dataclasses)
+- ✅ Data persistence layer (JSON file storage)
+- ✅ Configuration management system
+- ✅ Project/session loading and saving
+
+---
+
+### In Progress / Planned
+
+**Screen Recording System**
+- [ ] Cross-platform screen recording (Windows/Linux/macOS) - Partially done (Windows working, needs testing on other platforms)
+- [ ] Recording quality settings (resolution, FPS, codec) - Basic settings implemented
+- [ ] Recording preview window - Not started
+- [ ] Fullscreen application recording optimization
+
+**Session Review & Analysis**
+- [ ] Session review window with video playback
+- [ ] Video playback controls (play, pause, seek, speed)
+- [ ] Frame-by-frame navigation
+- [ ] Tracking data overlay on playback
+- [ ] Event marker system for review
+- [ ] Marker categorization and export
+
+**Data Visualization & Overlays**
+- [ ] Advanced overlay rendering system
+- [ ] Mouse cursor and click indicators
+- [ ] Movement trails and heatmaps
+- [ ] Time-series charts for tracking data
+- [ ] Heart rate/EDA overlays (hardware integration)
+
+**Export & Data Management**
+- [ ] Session data export (JSON, CSV)
+- [ ] Video export with overlays
+- [ ] Project dataset export (multi-session)
+- [ ] Batch export functionality
+
+**Future Hardware Integration**
+- [ ] EmotiBit device detection and streaming
+- [ ] Tobii Pro Spark eyetracker integration
+- [ ] Plugin system for new devices
+- [ ] Advanced synchronization with multiple LSL devices
+- [ ] Post-hoc device clock synchronization
+
+**Testing & Quality Assurance**
+- [ ] Unit tests for core functionality
+- [ ] Integration tests for recording pipeline
+- [ ] GUI testing framework
+- [ ] Performance testing for real-time operations
+- [ ] Cross-platform compatibility testing
+
+**Documentation**
+- [ ] User manual and tutorials
+- [ ] In-app help system
+- [ ] Keyboard shortcuts guide
+- [ ] Progress indicators and status messages
+
+---
+
+## Implementation Priorities
+
+| Phase | Focus | Status |
+|-------|-------|--------|
+| **1** | GUI structure, project management | ✅ Complete |
+| **2** | Screen recording, mouse tracking, LSL sync | ✅ Complete |
+| **3** | Session review, video playback, overlays | 🚧 In Progress |
+| **4** | Advanced visualization, export features | ⏳ Planned |
+| **5** | Hardware integration (EmotiBit, Tobii) | ⏳ Planned |
 
 ---
 
