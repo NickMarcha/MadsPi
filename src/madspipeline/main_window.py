@@ -1748,7 +1748,8 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 config=config,
                 output_dir=tracking_dir,
                 window=self,  # Record only this window
-                on_recording_started=on_video_recording_started  # Send sync event when recording starts
+                on_recording_started=on_video_recording_started,  # Send sync event when recording starts
+                on_recording_stopped=on_video_recording_started  # Send sync event when recording stops
             )
             
             # Start recording
@@ -2419,6 +2420,14 @@ class SessionReviewWindow(QMainWindow):
                         elif lsl_start_time:
                             self.video_lsl_offset = lsl_start_time
                             print(f"[SessionReview] WARNING: Using absolute recording-start time (session_start_time not available): {lsl_start_time:.6f}s")
+
+                    # Record actual frame count if available for frame-based mapping
+                    try:
+                        self.video_actual_frame_count = recording_info.get('actual_frame_count') or recording_info.get('frame_count') or None
+                        if self.video_actual_frame_count is not None:
+                            self.video_actual_frame_count = int(self.video_actual_frame_count)
+                    except Exception:
+                        self.video_actual_frame_count = None
                 except Exception as e:
                     print(f"[SessionReview] Could not load recording metadata: {e}")
             else:
@@ -2583,8 +2592,9 @@ class SessionReviewWindow(QMainWindow):
         events_layout = QVBoxLayout()
         
         self.events_table = QTableWidget()
-        self.events_table.setColumnCount(4)
-        self.events_table.setHorizontalHeaderLabels(["Time", "Type", "Event", "Details"])
+        # Columns: Video Time, LSL Time, Type, Event, Details
+        self.events_table.setColumnCount(5)
+        self.events_table.setHorizontalHeaderLabels(["Video Time", "LSL Time", "Type", "Event", "Details"])
         self.events_table.horizontalHeader().setStretchLastSection(True)
         self.events_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.events_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -2906,22 +2916,71 @@ class SessionReviewWindow(QMainWindow):
             # Get relative time
             relative_time = event.get('relative_time', 0.0)
 
-            # Time column (store numeric relative time in UserRole for precise seeking)
-            time_str = f"{relative_time:.2f}s"
-            time_item = QTableWidgetItem(time_str)
-            time_item.setData(Qt.ItemDataRole.UserRole, float(relative_time))
-            self.events_table.setItem(i, 0, time_item)
+            # Compute frame-index based mapping if we have video/frame info
+            fps = getattr(self, 'video_fps', 30.0) or 30.0
+            frame_count = getattr(self, 'video_actual_frame_count', None) or getattr(self, 'video_frame_count', None)
+            first_rel = getattr(self, 'video_lsl_offset', None)
+            video_time = None
+            frame_idx = None
+            try:
+                if frame_count and fps and first_rel is not None:
+                    # Map relative event time to recorded frame index
+                    frame_idx = int(round((relative_time - first_rel) * float(fps)))
+                    # Clamp to recorded frames
+                    if frame_idx < 0:
+                        frame_idx = 0
+                    if frame_idx >= int(frame_count):
+                        frame_idx = int(frame_count) - 1
+                    video_time = float(frame_idx) / float(fps)
+                elif first_rel is not None:
+                    # Fallback: continuous mapping
+                    video_time = relative_time - first_rel
+                else:
+                    video_time = None
+            except Exception:
+                video_time = None
+
+            # Margin-of-error: half-frame (conservative)
+            try:
+                margin = 0.5 * (1.0 / float(fps))
+            except Exception:
+                margin = 0.5 * (1.0 / 30.0)
+
+            # Build display string: show mapped video time ±margin and original LSL relative time
+            # Video time column (mapped to recorded frames when possible)
+            if video_time is not None:
+                video_time_str = f"{video_time:.2f}s ±{margin:.3f}s"
+            else:
+                video_time_str = ""
+            video_time_item = QTableWidgetItem(video_time_str)
+            try:
+                video_time_item.setData(Qt.ItemDataRole.UserRole, {
+                    'video_time': video_time,
+                    'lsl_relative': float(relative_time),
+                    'frame_index': int(frame_idx) if frame_idx is not None else None
+                })
+            except Exception:
+                video_time_item.setData(Qt.ItemDataRole.UserRole, float(relative_time))
+            self.events_table.setItem(i, 0, video_time_item)
+
+            # LSL time column
+            lsl_time_item = QTableWidgetItem(f"LSL {relative_time:.2f}s")
+            try:
+                lsl_time_item.setData(Qt.ItemDataRole.UserRole, float(relative_time))
+            except Exception:
+                lsl_time_item.setData(Qt.ItemDataRole.UserRole, relative_time)
+            self.events_table.setItem(i, 1, lsl_time_item)
 
             # Event type
             event_type = event.get('event_type', 'bridge_event')
             type_item = QTableWidgetItem(event_type)
             type_item.setData(Qt.ItemDataRole.UserRole, event.get('bridge_event_type', event_type))
-            self.events_table.setItem(i, 1, type_item)
+            self.events_table.setItem(i, 2, type_item)
 
-            # Event details
+            # Event details (Event description + details)
             if event_type == 'bridge_event':
                 bridge_type = event.get('bridge_event_type', 'unknown')
-                self.events_table.setItem(i, 2, QTableWidgetItem(f"Bridge: {bridge_type}"))
+                self.events_table.setItem(i, 3, QTableWidgetItem(f"Bridge: {bridge_type}"))
                 # Details: visible shortened text but store raw JSON in UserRole for copy
                 bridge_data = event.get('bridge_event_data', {})
                 details_str = str(bridge_data)[:100]  # Truncate long details for display
@@ -2930,21 +2989,21 @@ class SessionReviewWindow(QMainWindow):
                     details_item.setData(Qt.ItemDataRole.UserRole, json.dumps(bridge_data, ensure_ascii=False))
                 except Exception:
                     details_item.setData(Qt.ItemDataRole.UserRole, str(bridge_data))
-                self.events_table.setItem(i, 3, details_item)
+                self.events_table.setItem(i, 4, details_item)
             elif event_type == 'session_start':
                 s_item = QTableWidgetItem("Session Start")
                 s_item.setData(Qt.ItemDataRole.UserRole, json.dumps(event, ensure_ascii=False))
-                self.events_table.setItem(i, 2, s_item)
+                self.events_table.setItem(i, 3, s_item)
                 info_item = QTableWidgetItem("Session began")
                 info_item.setData(Qt.ItemDataRole.UserRole, json.dumps(event, ensure_ascii=False))
-                self.events_table.setItem(i, 3, info_item)
+                self.events_table.setItem(i, 4, info_item)
             else:
                 other_item = QTableWidgetItem(event_type)
                 other_item.setData(Qt.ItemDataRole.UserRole, json.dumps(event, ensure_ascii=False))
-                self.events_table.setItem(i, 2, other_item)
+                self.events_table.setItem(i, 3, other_item)
                 details_item = QTableWidgetItem(str(event)[:100])
                 details_item.setData(Qt.ItemDataRole.UserRole, json.dumps(event, ensure_ascii=False))
-                self.events_table.setItem(i, 3, details_item)
+                self.events_table.setItem(i, 4, details_item)
 
         # After populating, update highlighted event for current playback time
         try:
@@ -3470,10 +3529,19 @@ class SessionReviewWindow(QMainWindow):
                 # Prefer numeric value stored in UserRole (set earlier when populating)
                 numeric = time_item.data(Qt.ItemDataRole.UserRole)
                 try:
-                    if numeric is not None:
+                    # If we stored a dict with video_time use that (preferred)
+                    if isinstance(numeric, dict):
+                        vt = numeric.get('video_time')
+                        if vt is not None:
+                            self.current_time = float(vt)
+                        else:
+                            # Fallback to LSL relative if video_time missing
+                            self.current_time = float(numeric.get('lsl_relative', 0.0))
+                    elif numeric is not None:
+                        # Older stored format: numeric float
                         self.current_time = float(numeric)
                     else:
-                        time_str = time_item.text().replace('s', '')
+                        time_str = time_item.text().split()[0].replace('s', '')
                         self.current_time = float(time_str)
                     self.timeline_slider.blockSignals(True)
                     self.timeline_slider.setValue(int(self.current_time * 100))
@@ -3521,9 +3589,20 @@ class SessionReviewWindow(QMainWindow):
                 item = self.events_table.item(r, 0)
                 if not item:
                     continue
-                txt = item.text().replace('s', '')
+                # Prefer numeric video_time stored in UserRole dict
+                userval = item.data(Qt.ItemDataRole.UserRole)
+                t = None
                 try:
-                    t = float(txt)
+                    if isinstance(userval, dict):
+                        vt = userval.get('video_time')
+                        if vt is not None:
+                            t = float(vt)
+                        else:
+                            t = float(userval.get('lsl_relative', 0.0))
+                    else:
+                        # Fallback: try parsing displayed text (first token)
+                        txt = item.text().split()[0].replace('s', '')
+                        t = float(txt)
                 except Exception:
                     continue
                 if t <= time_seconds:

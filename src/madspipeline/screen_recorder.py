@@ -42,7 +42,8 @@ class ScreenRecorder:
     """Records screen during a session using mss for capture and opencv for encoding."""
     
     def __init__(self, session_id: str, config: ScreenRecordingConfig, output_dir: Path, window=None, 
-                 on_recording_started: Optional[Callable[[Dict[str, Any]], None]] = None):
+                 on_recording_started: Optional[Callable[[Dict[str, Any]], None]] = None,
+                 on_recording_stopped: Optional[Callable[[Dict[str, Any]], None]] = None):
         """Initialize screen recorder.
         
         Args:
@@ -66,13 +67,16 @@ class ScreenRecorder:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.window = window  # Window to record (None = full screen)
         self.on_recording_started = on_recording_started  # Callback for sync event
+        self.on_recording_stopped = on_recording_stopped
         
         self.is_recording = False
         self.frames: queue.Queue = queue.Queue()
+        self.frame_count: int = 0
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
         self.lsl_start_time: Optional[float] = None  # LSL timestamp when recording started
         self.lsl_first_frame_time: Optional[float] = None  # LSL timestamp of first written frame
+        self.lsl_last_frame_time: Optional[float] = None  # LSL timestamp of last written frame
         
         # Threading
         self.capture_thread: Optional[threading.Thread] = None
@@ -438,9 +442,18 @@ class ScreenRecorder:
                             # Write frame to video
                             if self.video_writer and self.video_writer.isOpened():
                                 self.video_writer.write(img_bgr)
+                                # Increment written frames counter
+                                try:
+                                    self.frame_count += 1
+                                except Exception:
+                                    pass
                                 # Record the LSL timestamp of the first frame written (if available)
-                                if self.lsl_first_frame_time is None and LSL_AVAILABLE:
-                                    self.lsl_first_frame_time = local_clock()
+                                if LSL_AVAILABLE:
+                                    now_lsl = local_clock()
+                                    if self.lsl_first_frame_time is None:
+                                        self.lsl_first_frame_time = now_lsl
+                                    # Always update last-frame LSL timestamp for precise end marker
+                                    self.lsl_last_frame_time = now_lsl
                         else:
                             print(f"Warning: Invalid capture region: {capture_region}")
                         
@@ -479,6 +492,29 @@ class ScreenRecorder:
         if self.video_writer:
             self.video_writer.release()
             self.video_writer = None
+
+        # After writer is released, attempt to open the produced file to get actual frame count/duration
+        actual_frame_count = None
+        actual_duration_from_file = None
+        try:
+            if self.video_path and self.video_path.exists():
+                try:
+                    cap = cv2.VideoCapture(str(self.video_path))
+                    if cap.isOpened():
+                        fc = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                        fps = cap.get(cv2.CAP_PROP_FPS) or self.config.fps
+                        if fc and fc > 0:
+                            actual_frame_count = int(fc)
+                        if fc and fps and fps > 0:
+                            actual_duration_from_file = float(fc) / float(fps)
+                    cap.release()
+                except Exception:
+                    # Best-effort: do not fail stop_recording if this check fails
+                    actual_frame_count = None
+                    actual_duration_from_file = None
+        except Exception:
+            actual_frame_count = None
+            actual_duration_from_file = None
         
         # Calculate duration
         if self.start_time and self.end_time:
@@ -489,6 +525,38 @@ class ScreenRecorder:
         if self.video_path and self.video_path.exists():
             file_size = self.video_path.stat().st_size / (1024 * 1024)  # MB
             print(f"Screen recording saved: {self.video_path} ({file_size:.2f} MB)")
+            # Save diagnostics to object for later retrieval
+            try:
+                self._last_actual_frame_count = actual_frame_count
+                self._last_actual_duration = actual_duration_from_file
+            except Exception:
+                pass
+            # Emit an end sync event via callback if available
+            try:
+                if self.on_recording_stopped:
+                    # Prefer last-frame LSL timestamp; fallback to local_clock() if not available
+                    lsl_ts = None
+                    if LSL_AVAILABLE and self.lsl_last_frame_time is not None:
+                        lsl_ts = self.lsl_last_frame_time
+                    elif LSL_AVAILABLE:
+                        lsl_ts = local_clock()
+
+                    end_event = {
+                        'data': {
+                            'lsl_timestamp': lsl_ts,
+                            'session_id': self.session_id
+                        },
+                        'timestamp': lsl_ts if lsl_ts is not None else datetime.now().timestamp(),
+                        'type': 'video_recording_stopped',
+                        'wall_clock': datetime.now().isoformat()
+                    }
+                    try:
+                        self.on_recording_stopped(end_event)
+                        print(f"[ScreenRecorder] Sent video_recording_stopped sync event: {end_event}")
+                    except Exception as e:
+                        print(f"[ScreenRecorder] Error sending end sync event: {e}")
+            except Exception:
+                pass
             return self.video_path
         else:
             print(f"Warning: Screen recording file not found: {self.video_path}")
@@ -511,7 +579,10 @@ class ScreenRecorder:
             'quality': self.config.recording_quality,
             # LSL sync information for event alignment
             'lsl_recording_start_time': self.lsl_start_time,  # Recording window creation time
-            'lsl_first_frame_time': self.lsl_first_frame_time  # Exact LSL timestamp of first frame written
+            'lsl_first_frame_time': self.lsl_first_frame_time,  # Exact LSL timestamp of first frame written
+            'lsl_last_frame_time': self.lsl_last_frame_time,
+            # Frame-level diagnostics
+            'frame_count': getattr(self, 'frame_count', None)
         }
         
         if self.start_time and self.end_time:
@@ -520,6 +591,25 @@ class ScreenRecorder:
             info['duration'] = (datetime.now() - self.start_time).total_seconds()
         else:
             info['duration'] = 0.0
+
+        # If frame_count available and fps known, include estimated duration from frames
+        try:
+            fc = getattr(self, 'frame_count', None)
+            if fc is not None and self.config.fps and self.config.fps > 0:
+                info['estimated_duration_from_frames'] = float(fc) / float(self.config.fps)
+        except Exception:
+            pass
+
+        # Include actual frame count/duration from final file if available
+        try:
+            actual_fc = getattr(self, '_last_actual_frame_count', None)
+            actual_dur = getattr(self, '_last_actual_duration', None)
+            if actual_fc is not None:
+                info['actual_frame_count'] = actual_fc
+            if actual_dur is not None:
+                info['actual_duration_from_file'] = actual_dur
+        except Exception:
+            pass
         
         return info
 
