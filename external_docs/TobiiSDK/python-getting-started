@@ -1,0 +1,54 @@
+Python - Getting started
+With this SDK you will be able to easily find and get data from your Tobii eye tracker. If you are new to eye tracking we recommend that you spend some time exploring the content in Tobii's Learn & Support section  of the Tobii Pro website . There you will find a lot of information about how eye tracking works in general and how to design studies.
+
+In the Common concepts section of this website, you will find information about concept referenced in the SDK documentation which are common for all SDK languages. This includes, but are not limited to, things like the different coordinate systems used as well as how time stamps are defined.
+
+The Tobii Pro SDK for Python is designed to be a natural part of Python and, as such, there are two ways you can install it; either by downloading it and installing it manually, or by using PyPI which requires an internet connection.
+
+Installing the Tobii Pro SDK using PyPI
+To install the Tobii Pro SDK from PyPI, you will use the pip command line tool. If you have Python installed from python.org, you will most likely already have pip and setuptools installed, but might need to upgrade to the latest version of pip. To do this, type the following on the command line and press Enter:
+
+On Linux or macOS:
+pip install -U pip setuptools
+
+On Windows:
+python -m pip install -U pip setuptools
+
+Otherwise, you can install pip following the instructions in the user guide on python.org .
+
+When you have pip installed, run the following command to install the Tobii Pro SDK:
+pip install tobii_research
+
+Once the installation is completed, verify that the packaged installed successfully by running the following command.
+pip list
+
+For more information about how to use PyPI, please refer to the PyPi website .
+
+Installing the Tobii Pro SDK manually
+Visit our download site for the Tobii Pro SDK , and download the latest version of the Tobii Pro SDK Python Binding for your platform. The package includes all files you will need to develop an application that communicates with a Tobii Pro eye tracker. Extract the files and put them where you usually keep your development files.
+
+Adding tobii_research to your project
+Extract all files for your platform to the same directory as your source files, or add the directory to PYTHONPATH.
+
+A quick guide to a functional application
+Most eye tracking applications follow the same pattern in terms of in which order functionality is used. The order is usually as follows:
+
+Browsing for eye trackers or selecting an eye tracker with known address.
+Establishing a connection with the eye tracker.
+Running a calibration procedure in which the eye tracker is calibrated to the user.
+Setting up a subscription to gaze data, and collecting and saving the data on the computer running the application. In some cases, the data is also shown live by the application.
+To do this with the Tobii Pro SDK is very simple:
+
+Step 1: Browsing
+Start with importing tobii_research, and use either the tobii_research.find_all_eyetrackers function to get a list of available eye trackers, or create a tobii_research.EyeTracker object from an address (URI).
+
+Step 2: Connecting to an eye tracker
+The objects returned from find_all_eyetrackers are instances of tobii_research.EyeTracker. Through those objects you can interact with the eye trackers.
+
+Step 3: Performing a calibration
+To calibrate the eye tracker, use a tobii_research.ScreenBasedCalibration object. The tobii_research.ScreenBasedCalibration class requires a tobii_research.EyeTracker object to be passed to the constructor. More information about how a calibration works can be found in the section Calibration.
+
+Step 4: Subscribing to data
+When you have the EyeTracker object and want to subscribe to gaze data, subscribe to either EYETRACKER_GAZE_DATA. The data will be available as GazeData. You can also get the data as a dictionary if you send True for as_dictionary to EyeTracker.subscribe_to.
+
+On the Step-by-step page, there's a detailed description on how to perform these steps.

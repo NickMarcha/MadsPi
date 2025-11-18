@@ -1,0 +1,47 @@
+Python - Step-by-step guide
+This is a more detailed version of the four step guide to a functional application that's described on the Getting started page. This guide is aimed at the first-time user of Tobii Pro SDK, who perhaps also is pretty new to programming in Python.
+
+Step-by-step guide to your first eye tracking application
+The following text is meant to guide you - a new user of the Tobii Pro SDK (and maybe also new to eye tracking and programming in Python) - to writing your first eye tracking study application!
+Prerequisites: Python 3.10 and Pro SDK should be installed on your computer (see installation section on the Getting started page), and there should be an eye tracker connected, either via USB or network.
+
+Step 0 : Preparations!
+This guide will not provide a complete runnable script that you can just copy-paste into your editor and run. Instead we try to describe the concepts and reasons behind the code, and you can choose to use (or copy-paste...) these snippets either in your existing Python code, or in a completely new file. However, if you want the simplest of scenarios, you can copy-paste every line of code described here, in the order they appear, into a new file, and it should run nicely.
+
+Before you can start using Pro SDK functions in your Python application, you need to import the Tobii Pro SDK module. This module is called "tobii_research", but for convenience we will give it a new, shorter, name in this example ("tr") by using the "import as" functionality.
+To do this, put the following at the beginning of your file:
+
+import tobii_research as tr Let's also import the time module, so that we can add some sleeps later on. import time
+Step 1 : Find the eye tracker!
+Now you're ready to start working with Tobii Pro eye tracking!
+In the tobii_research module there's a function for searching for eye trackers: find_all_eyetrackers().
+This function will look for both eye trackers connected directly to your computer via usb or ethernet cable, as well as eye trackers connected to the same network as your computer. To search for eye trackers simply call find_all_eyetrackers() and assign the output to a new variable:
+
+found_eyetrackers = tr.find_all_eyetrackers()
+The return value of find_all_eyetrackers() is a tuple of EyeTracker objects. You can access the meta data of the (first) eye tracker, and print it, like this:
+my_eyetracker = found_eyetrackers[0]
+print("Address: " + my_eyetracker.address)
+print("Model: " + my_eyetracker.model)
+print("Name (It's OK if this is empty): " + my_eyetracker.device_name)
+print("Serial number: " + my_eyetracker.serial_number)
+Step 2 : Calibrate the eye tracker
+Let's be blunt, calibration is a bit complicated. So, if this is indeed your first eye tracking application, we recommend that you either skip calibration (all Tobii Pro eye trackers are pre-configured with a default calibration, so you will get gaze data even if you skip calibration), or use Tobii Pro Eye Tracker Manager to perform the calibration. You can calibrate the eye tracker with Tobii Pro Eye Tracker Manager before running your application, or call Tobii Pro Eye Tracker Manager with a command line parameter (from within your code) that launches directly into calibration mode. Read more here.
+
+If you really want to dig into how to create your own calibration procedure, read the calibration part of the Common concepts area of this site, and check out the calibration code example in the SDK reference guide.
+
+Step 3 : Get gaze data!
+The eye tracker outputs a gaze data sample at a regular interval (30, 60, 120, 300, etc, times per seconds, depending on model). To get hold of this data, you tell the Tobii Pro SDK that you want to subscribe to the gaze data, and then provide the SDK with what is known as a callback function. The callback function is a function like any other, with the exception that you never need to call it yourself; instead it gets called every time there is a new gaze data sample. So, in this callback function, you do whatever it is that you want to do with the gaze data, for example printing some parts of it:
+
+def gaze_data_callback(gaze_data):
+    # Print gaze points of left and right eye
+    print("Left eye: ({gaze_left_eye}) \t Right eye: ({gaze_right_eye})".format(
+        gaze_left_eye=gaze_data['left_gaze_point_on_display_area'],
+        gaze_right_eye=gaze_data['right_gaze_point_on_display_area'])) Great! So now we have a function that will print any gaze data that it gets.
+Now we just need to tell the SDK that this function should be called when there is new gaze data. And tell the eye tracker to start tracking!
+This is done by one single call to the subscribe_to function of the eye tracker object from Step 1: my_eyetracker.subscribe_to(tr.EYETRACKER_GAZE_DATA, gaze_data_callback, as_dictionary=True) The first input parameter is a constant that tells the SDK that it's gaze data we want. There are other constants for the other types of data that you can get from the eye tracker (see SDK reference guide for details).
+The second parameter is the callback function that we just defined, and the third parameter tells the SDK that we want the data as a dictionary.
+That's all that's needed to get gaze data from the eye tracker, so now just let the program print the data for a while: time.sleep(5)
+Step 4 : Wrapping up!
+Now that we have collected the gaze data that we want, we should let the eye tracker (and SDK) know that we're done. You do this by unsubscribing from gaze data, in almost the same way as you subscribed:
+
+my_eyetracker.unsubscribe_from(tr.EYETRACKER_GAZE_DATA, gaze_data_callback) And that's all folks!
