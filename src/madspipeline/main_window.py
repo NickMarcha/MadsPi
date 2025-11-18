@@ -632,11 +632,18 @@ class ProjectSelectionWidget(QWidget):
 
     def _refresh_projects(self):
         """Refresh the project list."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Refreshing project list")
+        
         self.project_list.clear()
         
         try:
             projects = self.project_manager.list_projects()
+            logger.info(f"Found {len(projects)} projects")
+            
             for project in projects:
+                logger.debug(f"Loading project: {project.name} (type: {project.project_type})")
                 item = QListWidgetItem()
                 project_type_display = project.project_type.value.replace('_', ' ').title()
                 item.setText(f"{project.name}\n{project.description}\nType: {project_type_display}")
@@ -646,7 +653,9 @@ class ProjectSelectionWidget(QWidget):
                 item.setIcon(self._get_project_type_icon(project.project_type))
                 
                 self.project_list.addItem(item)
+            logger.info(f"Project list refreshed with {len(projects)} projects")
         except Exception as e:
+            logger.error(f"Failed to load projects: {e}", exc_info=True)
             QMessageBox.warning(self, "Error", f"Failed to load projects: {e}")
     
     def _create_new_project(self):
@@ -772,10 +781,17 @@ class ProjectDashboardWidget(QWidget):
         self.edit_project_button.clicked.connect(self.edit_project_requested.emit)
         
         # LSL Management button (only for embedded webpage projects)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Project type: {self.project.project_type}, EMBEDDED_WEBPAGE: {ProjectType.EMBEDDED_WEBPAGE}")
+        
         if self.project.project_type == ProjectType.EMBEDDED_WEBPAGE:
+            logger.info("Creating LSL management button for embedded webpage project")
             self.lsl_management_button = QPushButton("Manage LSL Streams")
             self.lsl_management_button.clicked.connect(self.lsl_management_requested.emit)
             project_buttons_layout.addWidget(self.lsl_management_button)
+        else:
+            logger.info(f"Skipping LSL management button (project type {self.project.project_type} != EMBEDDED_WEBPAGE)")
         
         self.refresh_button = QPushButton("🔄 Refresh")
         self.refresh_button.setToolTip("Refresh project data and sessions")
@@ -1628,10 +1644,13 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                         self.lsl_mouse_streamer = None
                         print("[LSL] Mouse tracking stream disabled")
                     
-                    # Create LSL recorder for all streams (will capture bridge events, mouse tracking, and any other devices)
-                    # The recorder will automatically detect and record all available LSL streams
+                    # Create LSL recorder. If project LSL config includes additional_stream_filters,
+                    # pass them so only selected streams are recorded.
                     self.lsl_recorder = LSLRecorder(self.session.session_id)
-                    self.lsl_recorder.start_recording(wait_time=2.0)
+                    filters = None
+                    if lsl_config and getattr(lsl_config, 'additional_stream_filters', None):
+                        filters = lsl_config.additional_stream_filters
+                    self.lsl_recorder.start_recording(wait_time=2.0, stream_name_filters=filters)
                     
                     # Push session_start event to LSL
                     session_start_event = {
@@ -3710,12 +3729,27 @@ class MainWindow(QMainWindow):
     """Main application window."""
     
     def __init__(self):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Initializing MainWindow")
+        
         super().__init__()
         self.project_manager = ProjectManager()
         self.current_project: Optional[Project] = None
         
-        self._setup_ui()
-        self._setup_connections()
+        try:
+            self._setup_ui()
+            logger.info("MainWindow UI setup complete")
+        except Exception as e:
+            logger.error(f"Error setting up MainWindow UI: {e}", exc_info=True)
+            raise
+        
+        try:
+            self._setup_connections()
+            logger.info("MainWindow connections established")
+        except Exception as e:
+            logger.error(f"Error setting up MainWindow connections: {e}", exc_info=True)
+            raise
     
     def _setup_ui(self):
         """Set up the main window UI."""
@@ -3749,6 +3783,10 @@ class MainWindow(QMainWindow):
     
     def _on_project_selected(self, project: Project):
         """Handle project selection."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Project selected: {project.name}")
+        
         self.current_project = project
         self._show_project_dashboard()
     
@@ -3913,11 +3951,23 @@ class MainWindow(QMainWindow):
     
     def _on_lsl_management(self):
         """Handle LSL management request."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("LSL management dialog requested")
+        
         if self.current_project.project_type != ProjectType.EMBEDDED_WEBPAGE:
+            logger.warning(f"LSL management requested for non-embedded project type: {self.current_project.project_type}")
             QMessageBox.warning(self, "Error", "LSL management is only available for embedded webpage projects.")
             return
         
-        dialog = LSLStreamManagerDialog(self.current_project, self)
+        try:
+            logger.info(f"Opening LSL manager for project: {self.current_project.name}")
+            dialog = LSLStreamManagerDialog(self.current_project, self)
+            logger.info("LSL manager dialog created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create LSL manager dialog: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to open LSL Manager: {e}")
+            return
         if dialog.exec() == QDialog.DialogCode.Accepted:
             try:
                 # Get updated LSL config

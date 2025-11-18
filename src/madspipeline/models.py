@@ -56,6 +56,14 @@ class LSLConfig:
     enable_emotibit: bool = False  # Enable Emotibit LSL stream
     tobii_stream_name: Optional[str] = None  # Custom Tobii stream name filter
     emotibit_stream_name: Optional[str] = None  # Custom Emotibit stream name filter
+    # Command to start EmotiBit LSL streamer (optional)
+    emotibit_start_command: Optional[str] = None
+    # If True, attempt to auto-start EmotiBit streamer when enabling it
+    emotibit_auto_start: bool = False
+    # BrainFlow integration (headless EmotiBit access)
+    use_brainflow: bool = False
+    brainflow_ip: Optional[str] = None
+    brainflow_auto_start: bool = False
     additional_stream_filters: List[str] = field(default_factory=list)  # Additional stream name filters to record
 
 
@@ -128,6 +136,11 @@ class Project:
                     'enable_emotibit': self.embedded_webpage_config.lsl_config.enable_emotibit,
                     'tobii_stream_name': self.embedded_webpage_config.lsl_config.tobii_stream_name,
                     'emotibit_stream_name': self.embedded_webpage_config.lsl_config.emotibit_stream_name,
+                    'emotibit_start_command': self.embedded_webpage_config.lsl_config.emotibit_start_command,
+                    'emotibit_auto_start': self.embedded_webpage_config.lsl_config.emotibit_auto_start,
+                    'use_brainflow': getattr(self.embedded_webpage_config.lsl_config, 'use_brainflow', False),
+                    'brainflow_ip': getattr(self.embedded_webpage_config.lsl_config, 'brainflow_ip', None),
+                    'brainflow_auto_start': getattr(self.embedded_webpage_config.lsl_config, 'brainflow_auto_start', False),
                     'additional_stream_filters': self.embedded_webpage_config.lsl_config.additional_stream_filters
                 }
             config_data['embedded_webpage'] = {
@@ -207,6 +220,11 @@ class Project:
                     enable_emotibit=lsl_cfg.get('enable_emotibit', False),
                     tobii_stream_name=lsl_cfg.get('tobii_stream_name'),
                     emotibit_stream_name=lsl_cfg.get('emotibit_stream_name'),
+                    emotibit_start_command=lsl_cfg.get('emotibit_start_command'),
+                    emotibit_auto_start=lsl_cfg.get('emotibit_auto_start', False),
+                    use_brainflow=lsl_cfg.get('use_brainflow', False),
+                    brainflow_ip=lsl_cfg.get('brainflow_ip'),
+                    brainflow_auto_start=lsl_cfg.get('brainflow_auto_start', False),
                     additional_stream_filters=lsl_cfg.get('additional_stream_filters', [])
                 )
             else:

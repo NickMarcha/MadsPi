@@ -5,6 +5,7 @@ Provides a dialog for managing LSL streams, including mouse tracking, marker API
 import json
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+import subprocess
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QCheckBox,
     QGroupBox, QFormLayout, QTableWidget, QTableWidgetItem, QLineEdit,
@@ -24,6 +25,14 @@ except ImportError:
 from .models import Project, LSLConfig
 from .lsl_integration import LSLBridgeStreamer, LSLMouseTrackingStreamer, LSLRecorder, LSL_AVAILABLE as LSL_INTEGRATION_AVAILABLE
 
+# Optional BrainFlow-based EmotiBit streamer
+try:
+    from .emotibit_brainflow import EmotiBitBrainflowStreamer
+    BRAINFLOW_UI_AVAILABLE = True
+except Exception:
+    EmotiBitBrainflowStreamer = None
+    BRAINFLOW_UI_AVAILABLE = False
+
 
 class LSLStreamManagerDialog(QDialog):
     """Dialog for managing LSL streams."""
@@ -31,25 +40,39 @@ class LSLStreamManagerDialog(QDialog):
     config_changed = Signal(LSLConfig)  # Emitted when configuration changes
     
     def __init__(self, project: Project, parent=None):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Initializing LSL Manager for project: {project.name}")
+        
         super().__init__(parent)
         self.project = project
         self.current_config: Optional[LSLConfig] = None
+        self.selected_streams = set()
+        self.available_streams = []
+        self.emotibit_process = None
         self.test_recorder: Optional[LSLRecorder] = None
         self.test_timer: Optional[QTimer] = None
         self.is_testing = False
         
         # Initialize config from project
-        if (project.embedded_webpage_config and 
-            project.embedded_webpage_config.lsl_config):
-            self.current_config = project.embedded_webpage_config.lsl_config
-        else:
-            # Create default config
-            self.current_config = LSLConfig(
-                enable_mouse_tracking=True,
-                enable_marker_api=project.embedded_webpage_config.enable_marker_api if project.embedded_webpage_config else True,
-                enable_tobii_eyetracker=False,
-                enable_emotibit=False
-            )
+        try:
+            if (project.embedded_webpage_config and 
+                project.embedded_webpage_config.lsl_config):
+                self.current_config = project.embedded_webpage_config.lsl_config
+                logger.info("Loaded LSL config from project")
+            else:
+                # Create default config
+                logger.info("Creating default LSL config")
+                self.current_config = LSLConfig(
+                    enable_mouse_tracking=True,
+                    enable_marker_api=project.embedded_webpage_config.enable_marker_api if project.embedded_webpage_config else True,
+                    enable_tobii_eyetracker=False,
+                    enable_emotibit=False
+                )
+        except Exception as e:
+            logger.error(f"Error initializing LSL config: {e}", exc_info=True)
+            self.current_config = LSLConfig()
+        
         # Tracks streams selected for recording in the UI
         self.selected_streams = set()
         
@@ -57,8 +80,19 @@ class LSLStreamManagerDialog(QDialog):
         self.setMinimumSize(800, 600)
         self.setModal(True)
         
-        self._setup_ui()
-        self._update_ui_from_config()
+        try:
+            self._setup_ui()
+            logger.info("LSL Manager UI setup complete")
+        except Exception as e:
+            logger.error(f"Error setting up LSL Manager UI: {e}", exc_info=True)
+            raise
+        
+        try:
+            self._update_ui_from_config()
+            logger.info("LSL Manager UI updated from config")
+        except Exception as e:
+            logger.error(f"Error updating LSL Manager UI from config: {e}", exc_info=True)
+            raise
     
     def _setup_ui(self):
         """Set up the LSL management UI."""
@@ -124,25 +158,24 @@ class LSLStreamManagerDialog(QDialog):
         tobii_layout.addWidget(QLabel("Stream name:"))
         tobii_layout.addWidget(self.tobii_stream_edit)
         config_layout.addRow("Enable Tobii Eyetracker:", tobii_layout)
-        
-        # Emotibit
+
+        # EmotiBit (BrainFlow backend) - minimal UI (Option A: automatic start on session)
+        # User only needs to: 1) enable/disable, 2) optionally set IP if autodiscovery fails
         emotibit_layout = QHBoxLayout()
         self.emotibit_check = QCheckBox()
-        self.emotibit_check.setChecked(self.current_config.enable_emotibit)
+        self.emotibit_check.setChecked(getattr(self.current_config, 'use_brainflow', False))
         self.emotibit_check.stateChanged.connect(self._on_config_changed)
-        self.emotibit_stream_edit = QLineEdit()
-        self.emotibit_stream_edit.setPlaceholderText("Auto-detect (leave empty)")
-        if self.current_config.emotibit_stream_name:
-            self.emotibit_stream_edit.setText(self.current_config.emotibit_stream_name)
-        self.emotibit_stream_edit.textChanged.connect(self._on_config_changed)
-        self.emotibit_stream_edit.setEnabled(self.current_config.enable_emotibit)
-        self.emotibit_check.stateChanged.connect(
-            lambda state: self.emotibit_stream_edit.setEnabled(state == Qt.CheckState.Checked)
-        )
         emotibit_layout.addWidget(self.emotibit_check)
-        emotibit_layout.addWidget(QLabel("Stream name:"))
-        emotibit_layout.addWidget(self.emotibit_stream_edit)
-        config_layout.addRow("Enable Emotibit:", emotibit_layout)
+        
+        # Optional: IP address field (helps discovery if network is restricted)
+        self.brainflow_ip_edit = QLineEdit()
+        self.brainflow_ip_edit.setPlaceholderText("Optional: EmotiBit IP or broadcast (e.g. 192.168.0.255)")
+        if getattr(self.current_config, 'brainflow_ip', None):
+            self.brainflow_ip_edit.setText(self.current_config.brainflow_ip)
+        self.brainflow_ip_edit.textChanged.connect(self._on_config_changed)
+        emotibit_layout.addWidget(self.brainflow_ip_edit)
+        
+        config_layout.addRow("Enable EmotiBit (BrainFlow):", emotibit_layout)
         
         config_group.setLayout(config_layout)
         scroll_layout.addWidget(config_group)
@@ -180,11 +213,25 @@ class LSLStreamManagerDialog(QDialog):
         self.streams_table.setMaximumHeight(200)
         test_layout.addWidget(self.streams_table)
         
-        # Refresh streams button
+        # Refresh streams button and inspect channels
+        refresh_layout = QHBoxLayout()
         refresh_button = QPushButton("Refresh Streams")
         refresh_button.clicked.connect(self._refresh_streams)
         refresh_button.setEnabled(LSL_AVAILABLE)
-        test_layout.addWidget(refresh_button)
+        refresh_layout.addWidget(refresh_button)
+
+        clear_button = QPushButton("Clear Streams")
+        clear_button.clicked.connect(self._clear_streams)
+        refresh_layout.addWidget(clear_button)
+
+        self.inspect_button = QPushButton("View Selected Stream Channels")
+        self.inspect_button.clicked.connect(self._inspect_selected_stream_channels)
+        self.inspect_button.setEnabled(LSL_AVAILABLE)
+        refresh_layout.addWidget(self.inspect_button)
+
+
+        refresh_layout.addStretch()
+        test_layout.addLayout(refresh_layout)
         
         test_group.setLayout(test_layout)
         scroll_layout.addWidget(test_group)
@@ -230,23 +277,33 @@ class LSLStreamManagerDialog(QDialog):
     
     def _update_ui_from_config(self):
         """Update UI elements from current configuration."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not self.current_config:
+            logger.warning("_update_ui_from_config called with no current_config")
             return
         
-        self.mouse_tracking_check.setChecked(self.current_config.enable_mouse_tracking)
-        self.marker_api_check.setChecked(self.current_config.enable_marker_api)
-        self.tobii_check.setChecked(self.current_config.enable_tobii_eyetracker)
-        self.emotibit_check.setChecked(self.current_config.enable_emotibit)
-        
-        if self.current_config.tobii_stream_name:
-            self.tobii_stream_edit.setText(self.current_config.tobii_stream_name)
-        else:
-            self.tobii_stream_edit.clear()
-        
-        if self.current_config.emotibit_stream_name:
-            self.emotibit_stream_edit.setText(self.current_config.emotibit_stream_name)
-        else:
-            self.emotibit_stream_edit.clear()
+        try:
+            self.mouse_tracking_check.setChecked(self.current_config.enable_mouse_tracking)
+            self.marker_api_check.setChecked(self.current_config.enable_marker_api)
+            self.tobii_check.setChecked(self.current_config.enable_tobii_eyetracker)
+            
+            if self.current_config.tobii_stream_name:
+                self.tobii_stream_edit.setText(self.current_config.tobii_stream_name)
+            else:
+                self.tobii_stream_edit.clear()
+            
+            # EmotiBit: only load enable checkbox and IP field (BrainFlow backend)
+            self.emotibit_check.setChecked(getattr(self.current_config, 'use_brainflow', False))
+            if getattr(self.current_config, 'brainflow_ip', None):
+                self.brainflow_ip_edit.setText(self.current_config.brainflow_ip)
+            else:
+                self.brainflow_ip_edit.clear()
+            logger.debug("UI updated from config successfully")
+        except Exception as e:
+            logger.error(f"Error updating UI from config: {e}", exc_info=True)
+            raise
 
         # Pre-load any previously selected stream filters
         if self.current_config.additional_stream_filters:
@@ -254,6 +311,17 @@ class LSLStreamManagerDialog(QDialog):
                 self.selected_streams = set(self.current_config.additional_stream_filters)
             except Exception:
                 self.selected_streams = set()
+
+        # Auto-start BrainFlow streamer if configured
+        try:
+            if getattr(self.current_config, 'use_brainflow', False) and getattr(self.current_config, 'brainflow_auto_start', False):
+                # Start brainflow streamer in background
+                try:
+                    self._start_brainflow_streamer()
+                except Exception:
+                    pass
+        except Exception:
+            pass
     
     def _on_config_changed(self):
         """Handle configuration changes."""
@@ -261,13 +329,14 @@ class LSLStreamManagerDialog(QDialog):
         self.current_config.enable_mouse_tracking = self.mouse_tracking_check.isChecked()
         self.current_config.enable_marker_api = self.marker_api_check.isChecked()
         self.current_config.enable_tobii_eyetracker = self.tobii_check.isChecked()
-        self.current_config.enable_emotibit = self.emotibit_check.isChecked()
         
         tobii_name = self.tobii_stream_edit.text().strip()
         self.current_config.tobii_stream_name = tobii_name if tobii_name else None
         
-        emotibit_name = self.emotibit_stream_edit.text().strip()
-        self.current_config.emotibit_stream_name = emotibit_name if emotibit_name else None
+        # EmotiBit: persist only enable checkbox and IP field (BrainFlow backend)
+        self.current_config.use_brainflow = self.emotibit_check.isChecked()
+        iptxt = self.brainflow_ip_edit.text().strip()
+        self.current_config.brainflow_ip = iptxt if iptxt else None
     
     def _refresh_streams(self):
         """Refresh the list of available LSL streams."""
@@ -277,6 +346,8 @@ class LSLStreamManagerDialog(QDialog):
         try:
             # Resolve streams with a short timeout
             streams = resolve_streams(1.0)
+            # Save available streams for inspection
+            self.available_streams = streams
             
             self.streams_table.setRowCount(len(streams))
             
@@ -317,20 +388,193 @@ class LSLStreamManagerDialog(QDialog):
             self._stop_test()
         else:
             self._start_test()
+
+    def _start_emotibit_process(self):
+        """Start an external process to launch EmotiBit LSL streams (user-provided command)."""
+        if self.emotibit_process:
+            QMessageBox.information(self, "Info", "EmotiBit process already running.")
+            return
+
+        cmd = self.emotibit_cmd_edit.text().strip() if hasattr(self, 'emotibit_cmd_edit') else None
+        if not cmd:
+            QMessageBox.warning(self, "Missing Command", "No EmotiBit start command provided.")
+            return
+
+        try:
+            # Start the command as a new process; capture stdout/stderr so logs pick it up
+            # Use shell=True to allow complex commands; caller should ensure safety
+            self.emotibit_process = subprocess.Popen(cmd, shell=True)
+            self.start_emotibit_button.setEnabled(False)
+            self.stop_emotibit_button.setEnabled(True)
+            QMessageBox.information(self, "EmotiBit", "Started EmotiBit process.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to start EmotiBit process: {e}")
+
+    def _stop_emotibit_process(self):
+        """Stop the EmotiBit process if it was started from the manager."""
+        if not self.emotibit_process:
+            QMessageBox.information(self, "Info", "No EmotiBit process to stop.")
+            return
+
+        try:
+            self.emotibit_process.terminate()
+            self.emotibit_process.wait(timeout=5)
+        except Exception:
+            try:
+                self.emotibit_process.kill()
+            except Exception:
+                pass
+        finally:
+            self.emotibit_process = None
+            self.start_emotibit_button.setEnabled(True)
+            self.stop_emotibit_button.setEnabled(False)
+            QMessageBox.information(self, "EmotiBit", "Stopped EmotiBit process.")
+
+    def _inspect_selected_stream_channels(self):
+        """Show channel information for the currently selected stream in the table."""
+        sel = self.streams_table.currentRow()
+        if sel < 0 or sel >= len(self.available_streams):
+            QMessageBox.information(self, "No Selection", "Please select a stream in the table first.")
+            return
+
+        stream = self.available_streams[sel]
+        try:
+            desc = stream.desc()
+            # Try several ways to extract channel info; fall back to stringifying desc
+            channels_text = None
+            try:
+                # Some pylsl StreamInfo desc has to_xml or to_string
+                if hasattr(desc, 'to_xml'):
+                    channels_text = desc.to_xml()
+                elif hasattr(desc, 'to_string'):
+                    channels_text = desc.to_string()
+                else:
+                    channels_text = str(desc)
+            except Exception:
+                channels_text = str(desc)
+
+            # Show in a scrollable dialog
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"Channels: {stream.name()}")
+            dlg.setModal(True)
+            dlg.setMinimumSize(600, 400)
+            layout = QVBoxLayout(dlg)
+            text = QTextEdit()
+            text.setReadOnly(True)
+            text.setPlainText(channels_text)
+            layout.addWidget(text)
+            btn = QPushButton("Close")
+            btn.clicked.connect(dlg.accept)
+            layout.addWidget(btn)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not retrieve channel info: {e}")
+
+    def _start_brainflow_streamer(self):
+        """Start the internal BrainFlow-based EmotiBit streamer."""
+        if not BRAINFLOW_UI_AVAILABLE or EmotiBitBrainflowStreamer is None:
+            QMessageBox.warning(self, "BrainFlow Missing", "BrainFlow integration is not available in this environment.")
+            return
+
+        if getattr(self, 'brainflow_streamer', None):
+            QMessageBox.information(self, "Info", "BrainFlow streamer already running.")
+            return
+
+        ip = self.brainflow_ip_edit.text().strip() if hasattr(self, 'brainflow_ip_edit') else None
+        try:
+            self.brainflow_streamer = EmotiBitBrainflowStreamer(ip_address=ip if ip else None)
+            self.brainflow_streamer.start()
+            self.start_brainflow_button.setEnabled(False)
+            self.stop_brainflow_button.setEnabled(True)
+            QMessageBox.information(self, "BrainFlow", "Started BrainFlow EmotiBit streamer.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to start BrainFlow streamer: {e}")
+
+    def _stop_brainflow_streamer(self):
+        """Stop the BrainFlow-based streamer if running."""
+        bf = getattr(self, 'brainflow_streamer', None)
+        if not bf:
+            QMessageBox.information(self, "Info", "No BrainFlow streamer is running.")
+            return
+
+        try:
+            bf.stop()
+        except Exception:
+            pass
+        finally:
+            self.brainflow_streamer = None
+            self.start_brainflow_button.setEnabled(True)
+            self.stop_brainflow_button.setEnabled(False)
+            try:
+                self.start_emotibit_brainflow_button.setEnabled(True)
+                self.stop_emotibit_brainflow_button.setEnabled(False)
+            except Exception:
+                pass
+            QMessageBox.information(self, "BrainFlow", "Stopped BrainFlow streamer.")
+
+    def _start_emotibit_via_brainflow(self):
+        """Convenience wrapper: start EmotiBit using the BrainFlow backend and update buttons.
+
+        This makes a single-click operation for users: Start EmotiBit (BrainFlow).
+        """
+        # ensure config updated
+        try:
+            self.current_config.use_brainflow = True
+        except Exception:
+            pass
+        try:
+            iptxt = self.brainflow_ip_edit.text().strip()
+            self.current_config.brainflow_ip = iptxt if iptxt else None
+        except Exception:
+            pass
+
+        # start the brainflow streamer
+        try:
+            self._start_brainflow_streamer()
+            # update emotibit-specific buttons
+            try:
+                self.start_emotibit_brainflow_button.setEnabled(False)
+                self.stop_emotibit_brainflow_button.setEnabled(True)
+            except Exception:
+                pass
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to start EmotiBit (BrainFlow): {e}")
+
+    def _clear_streams(self):
+        """Clear the list of available streams shown in the table."""
+        try:
+            self.available_streams = []
+            self.streams_table.setRowCount(0)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to clear streams: {e}")
     
     def _start_test(self):
         """Start receiving LSL streams for testing."""
         if not LSL_AVAILABLE:
             QMessageBox.warning(self, "Error", "LSL is not available.")
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info("Starting LSL test receiver")
+                    # First, check if EmotiBit is enabled and streamer is not running
+                    if getattr(self.current_config, 'use_brainflow', False):
+                        logger.info("EmotiBit (BrainFlow) is enabled - checking if streamer is running")
+                        if not getattr(self, 'brainflow_streamer', None):
+                            logger.info("Starting BrainFlow streamer automatically for test")
+                            self._start_brainflow_streamer()
+                            time.sleep(1)  # Give streamer time to start
+        
             return
         
         try:
             # Create test recorder
             test_session_id = f"test_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             self.test_recorder = LSLRecorder(test_session_id)
+                logger.info(f"Created test recorder with session ID: {test_session_id}")
             self.test_recorder.start_recording(wait_time=2.0)
+                logger.info(f"Recording started, found {len(getattr(self.test_recorder, 'stream_inlets', []))} LSL streams")
             
             if not self.test_recorder.is_recording:
+                            logger.warning("Test recorder failed to find any LSL streams")
                 QMessageBox.warning(self, "Error", "No LSL streams found for testing.")
                 return
             
@@ -343,11 +587,13 @@ class LSLStreamManagerDialog(QDialog):
             self.test_button.setText("Receiving...")
             self.test_button.setEnabled(False)
             self.stop_test_button.setEnabled(True)
+                logger.info("LSL test receiver started successfully")
             
             # Clear data table
             self.data_table.setRowCount(0)
             
         except Exception as e:
+            logger.error(f"Failed to start test: {e}", exc_info=True)
             QMessageBox.warning(self, "Error", f"Failed to start test: {e}")
             if self.test_recorder:
                 try:
@@ -358,6 +604,9 @@ class LSLStreamManagerDialog(QDialog):
     
     def _stop_test(self):
         """Stop stream testing mode."""
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Stopping LSL test receiver")
         if self.test_timer:
             self.test_timer.stop()
             self.test_timer = None
@@ -372,6 +621,7 @@ class LSLStreamManagerDialog(QDialog):
         self.is_testing = False
         self.test_button.setText("Start Receiving Test")
         self.test_button.setEnabled(True)
+            logger.info("LSL test receiver stopped")
         self.stop_test_button.setEnabled(False)
     
     def _update_test_data(self):

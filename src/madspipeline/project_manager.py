@@ -167,16 +167,27 @@ class ProjectManager:
         Returns:
             Loaded project instance
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Loading project from: {project_path}")
+        
         project_path = Path(project_path)
         metadata_file = project_path / "project.json"
         
         if not metadata_file.exists():
+            logger.error(f"Project metadata not found at {metadata_file}")
             raise FileNotFoundError(f"Project metadata not found at {metadata_file}")
         
-        with open(metadata_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            logger.debug("Project JSON loaded")
         
-        project = Project.from_dict(data)
+            project = Project.from_dict(data)
+            logger.info(f"Project loaded: {project.name}")
+        except Exception as e:
+            logger.error(f"Error loading project: {e}", exc_info=True)
+            raise
         
         # Check if migration is needed (but don't run migrations automatically)
         from .migrations import CURRENT_VERSION

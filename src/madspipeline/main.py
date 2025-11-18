@@ -1,5 +1,7 @@
 import sys
 import logging
+import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
@@ -28,25 +30,63 @@ def main():
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 
-        ch = logging.StreamHandler(sys.stdout)
+        ch = logging.StreamHandler(sys.__stdout__)
         ch.setFormatter(formatter)
         logger.addHandler(ch)
 
-        # Redirect stdout/stderr to logger so print() also ends up in log file
-        class StreamToLogger:
-            def __init__(self, logger, level=logging.INFO):
-                self.logger = logger
-                self.level = level
+        # Capture native C-level stdout/stderr (e.g., OpenCV, pylsl native logs)
+        try:
+            # Create a pipe to capture FD writes
+            r_fd, w_fd = os.pipe()
 
-            def write(self, buf):
-                for line in buf.rstrip().splitlines():
-                    self.logger.log(self.level, line.rstrip())
+            # Save original fds for console
+            orig_stdout_fd = os.dup(1)
+            orig_stderr_fd = os.dup(2)
 
-            def flush(self):
-                pass
+            # Duplicate write end of pipe onto stdout and stderr so native libs write into it
+            os.dup2(w_fd, 1)
+            os.dup2(w_fd, 2)
 
-        sys.stdout = StreamToLogger(logging.getLogger('STDOUT'), logging.INFO)
-        sys.stderr = StreamToLogger(logging.getLogger('STDERR'), logging.ERROR)
+            # Open a binary file handle for the log file to write native bytes
+            log_file_bin = open(log_file, 'ab', buffering=0)
+
+            def _reader_thread(fd, orig_out_fd, logger_instance):
+                """Read from pipe and write bytes to both original stdout and log file."""
+                try:
+                    with os.fdopen(fd, 'rb', closefd=True) as reader:
+                        while True:
+                            chunk = reader.read(1024)
+                            if not chunk:
+                                break
+                            # Write to original console
+                            try:
+                                os.write(orig_out_fd, chunk)
+                            except Exception:
+                                pass
+                            # Also write to the log file (binary)
+                            try:
+                                log_file_bin.write(chunk)
+                                log_file_bin.flush()
+                            except Exception:
+                                pass
+                            # Also log decoded text via logging to keep consistency
+                            try:
+                                text = chunk.decode('utf-8', errors='replace')
+                                for line in text.rstrip().splitlines():
+                                    logger_instance.info(line)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            # Start reader thread to tee pipe contents
+            t = threading.Thread(target=_reader_thread, args=(r_fd, orig_stdout_fd, logger), daemon=True)
+            t.start()
+
+        except Exception:
+            # If FD-level redirect fails, fall back to Python-level redirection
+            sys.stdout = logging.StreamHandler(sys.__stdout__)
+            sys.stderr = logging.StreamHandler(sys.__stderr__)
 
         logging.info("Starting MadsPipeline")
     except Exception:

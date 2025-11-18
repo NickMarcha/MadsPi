@@ -175,7 +175,7 @@ class LSLRecorder:
         self.is_recording = False
         self.session_start_time: Optional[float] = None
     
-    def start_recording(self, wait_time: float = 1.0):
+    def start_recording(self, wait_time: float = 1.0, stream_name_filters: Optional[List[str]] = None):
         """Start recording LSL streams.
         
         Args:
@@ -185,20 +185,36 @@ class LSLRecorder:
             return
         
         try:
-            # Resolve all available LSL streams
+            # Resolve available LSL streams
             # Note: resolve_streams() takes wait_time as positional argument, not keyword
             print(f"Resolving LSL streams for session {self.session_id}...")
             streams = resolve_streams(wait_time)
-            
+
             if not streams:
                 print("No LSL streams found.")
                 return
-            
-            # Create inlets for each stream
-            for stream in streams:
+
+            # Optionally filter streams by name (exact or substring match, case-insensitive)
+            filtered_streams = []
+            if stream_name_filters:
+                lower_filters = [f.lower() for f in stream_name_filters if f]
+                for s in streams:
+                    name = s.name() or ''
+                    lname = name.lower()
+                    if any(f == lname or f in lname for f in lower_filters):
+                        filtered_streams.append(s)
+            else:
+                filtered_streams = streams
+
+            if not filtered_streams:
+                print("No LSL streams matched the provided filters.")
+                return
+
+            # Create inlets for each selected stream
+            for stream in filtered_streams:
                 inlet = StreamInlet(stream)
                 self.inlets.append(inlet)
-                
+
                 # Store stream info
                 info = {
                     'name': stream.name(),
