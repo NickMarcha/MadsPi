@@ -26,6 +26,7 @@ End result: a graphical tool that combines and captures data from supported devi
 ## Quick Start
 
 ### Windows
+
 ```powershell
 git clone https://github.com/NickMarcha/MadsPi.git
 cd MadsPi
@@ -36,6 +37,7 @@ python src/madspipeline/main.py
 ```
 
 ### Linux
+
 ```bash
 git clone https://github.com/NickMarcha/MadsPi.git
 cd MadsPi
@@ -45,6 +47,7 @@ python src/madspipeline/main.py
 ```
 
 ### macOS
+
 ```bash
 git clone https://github.com/NickMarcha/MadsPi.git
 cd MadsPi
@@ -385,7 +388,52 @@ tracking_data/{project_id}/sessions/{session_id}/
 
 ---
 
-### In Progress / Planned
+### Phase 3: Critical Data Management & Testing (Target: Nov 25, 2025)
+
+**Data Export System** ⏳ Priority: HIGH
+- [ ] Fix export to include actual tracking data (currently only exports project info)
+- [ ] Implement CSV export format with configurable columns
+- [ ] Implement JSON export format maintaining full structure
+- [ ] Add session-level export (single session data)
+- [ ] Add project-level export (all sessions in project)
+- [ ] Add data sanitization/filtering options
+
+**LSL Stream Synchronization Testing** ⏳ Priority: HIGH
+- [ ] Test LSL clock sync for mouse tracking stream
+- [ ] Test LSL clock sync for hardware device streams (EmotiBit, Tobii)
+- [ ] Verify clock offset calculations per stream
+- [ ] Document sync validation procedures
+- [ ] Create sync test fixtures for CI/CD
+
+**LSL Stream Management Overhaul** ⏳ Priority: HIGH
+- [ ] Redesign LSL Manager UI for channel/type selection
+- [ ] Add per-device stream filtering (select which channels to record)
+- [ ] Implement device-specific configuration profiles
+- [ ] Add stream preview/validation before recording
+- [ ] Store device preferences in project config
+
+**Video Playback Validation** ⏳ Priority: HIGH
+- [ ] Verify video resolution accuracy in recordings
+- [ ] Test event overlay alignment with video playback
+- [ ] Validate sync marker offsets with actual recordings
+- [ ] Create test cases for different video codecs
+
+**UI/UX Improvements** ⏳ Priority: MEDIUM
+- [ ] Disable "Debug Session" button (future enhancement)
+- [ ] Add "Open in Explorer" button to project overview
+- [ ] Add folder navigation for session data
+- [ ] Improve project overview card layout
+
+**Project File Structure Review** ⏳ Priority: MEDIUM
+- [ ] Audit current tracking_data directory layout for redundancy
+- [ ] Identify and consolidate duplicate data files
+- [ ] Optimize session metadata organization
+- [ ] Document final structure schema
+- [ ] Create migration utility if needed
+
+---
+
+### In Progress / Planned (Phase 4+)
 
 **Screen Recording System**
 - [ ] Cross-platform screen recording (Windows/Linux/macOS) - Partially done (Windows working, needs testing on other platforms)
@@ -409,9 +457,8 @@ tracking_data/{project_id}/sessions/{session_id}/
 - [ ] Heart rate/EDA overlays (hardware integration)
 
 **Export & Data Management**
-- [ ] Session data export (JSON, CSV)
 - [ ] Video export with overlays
-- [ ] Project dataset export (multi-session)
+- [ ] Project dataset export (multi-session) - See Phase 3
 - [ ] Batch export functionality
 
 **Future Hardware Integration**
@@ -438,13 +485,21 @@ tracking_data/{project_id}/sessions/{session_id}/
 
 ## Implementation Priorities
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| **1** | GUI structure, project management | ✅ Complete |
-| **2** | Screen recording, mouse tracking, LSL sync | ✅ Complete |
-| **3** | Session review, video playback, overlays | 🚧 In Progress |
-| **4** | Advanced visualization, export features | ⏳ Planned |
-| **5** | Hardware integration (EmotiBit, Tobii) | ⏳ Planned |
+| Phase | Focus | Target | Status |
+|-------|-------|--------|--------|
+| **1** | GUI structure, project management | ✅ Complete | ✅ Complete |
+| **2** | Screen recording, mouse tracking, LSL sync | ✅ Complete | ✅ Complete |
+| **3** | Data export, LSL testing & management, playback validation | Nov 25, 2025 | 🚧 In Progress |
+| **4** | Session review, video playback overlays | Dec 2025 | ⏳ Planned |
+| **5** | Hardware integration (EmotiBit, Tobii) | Jan 2026 | ⏳ Planned |
+
+**Phase 3 Breakdown (Critical Path - Nov 25 Deadline):**
+- Data export system (CSV/JSON, session/project level)
+- LSL stream sync validation for all device types
+- LSL Manager UI overhaul (channel/type selection per device)
+- Video resolution & playback alignment testing
+- Minor UI improvements (disable debug button, add explorer navigation)
+- Project file structure audit & optimization
 
 ---
 
