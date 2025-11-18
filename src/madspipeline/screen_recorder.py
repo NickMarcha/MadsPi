@@ -72,6 +72,7 @@ class ScreenRecorder:
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
         self.lsl_start_time: Optional[float] = None  # LSL timestamp when recording started
+        self.lsl_first_frame_time: Optional[float] = None  # LSL timestamp of first written frame
         
         # Threading
         self.capture_thread: Optional[threading.Thread] = None
@@ -437,6 +438,9 @@ class ScreenRecorder:
                             # Write frame to video
                             if self.video_writer and self.video_writer.isOpened():
                                 self.video_writer.write(img_bgr)
+                                # Record the LSL timestamp of the first frame written (if available)
+                                if self.lsl_first_frame_time is None and LSL_AVAILABLE:
+                                    self.lsl_first_frame_time = local_clock()
                         else:
                             print(f"Warning: Invalid capture region: {capture_region}")
                         
@@ -506,7 +510,8 @@ class ScreenRecorder:
             'fps': self.config.fps,
             'quality': self.config.recording_quality,
             # LSL sync information for event alignment
-            'lsl_recording_start_time': self.lsl_start_time  # Use this to offset event timestamps
+            'lsl_recording_start_time': self.lsl_start_time,  # Recording window creation time
+            'lsl_first_frame_time': self.lsl_first_frame_time  # Exact LSL timestamp of first frame written
         }
         
         if self.start_time and self.end_time:

@@ -1935,7 +1935,8 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         if hasattr(self, 'tracking_timer'):
             self.tracking_timer.stop()
         
-        # Stop screen recording
+        # Stop screen recording and store recorder reference for saving metadata
+        screen_recorder_to_save = self.screen_recorder
         if self.screen_recorder:
             try:
                 video_path = self.screen_recorder.stop_recording()
@@ -1972,12 +1973,14 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         duration = (session_end_time - self.session_start_time).total_seconds()
         self.session.duration = duration
         
-        # Save session data (including LSL data) - use stored reference
-        # Temporarily restore recorder for saving
+        # Save session data (including LSL data) - use stored references
+        # Temporarily restore recorders for saving
+        self._screen_recorder_ref = screen_recorder_to_save
         self.lsl_recorder = lsl_recorder_to_save
         self._save_session_data()
-        # Now we can set it to None
+        # Now we can set them to None
         self.lsl_recorder = None
+        self._screen_recorder_ref = None
         
         # Emit session ended signal
         self.session_ended.emit(self.session.session_id)
@@ -1991,6 +1994,17 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         # Create tracking data directory
         tracking_dir = self.project.project_path / "tracking_data" / self.session.session_id
         tracking_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save recording metadata (for precise video-event alignment)
+        if hasattr(self, '_screen_recorder_ref'):
+            try:
+                recording_info = self._screen_recorder_ref.get_recording_info()
+                info_file = tracking_dir / f"screen_recording_info_{self.session.session_id}.json"
+                with open(info_file, 'w', encoding='utf-8') as f:
+                    json.dump(recording_info, f, indent=2)
+                print(f"Saved recording metadata to {info_file}")
+            except Exception as e:
+                print(f"Warning: Could not save recording metadata: {e}")
         
         # Save LSL recorded data (this is the comprehensive record with all streams)
         # All data (bridge events, mouse tracking, etc.) goes through LSL
@@ -2292,6 +2306,7 @@ class SessionReviewWindow(QMainWindow):
         self.lsl_data: List[Dict[str, Any]] = []
         self.session_start_time: Optional[datetime] = None
         self.session_duration: float = 0.0
+        self.video_lsl_offset: float = 0.0  # LSL time offset for video alignment (video_time = event.relative_time - offset)
         
         # Video playback
         self.video_path: Optional[Path] = None
@@ -2330,13 +2345,18 @@ class SessionReviewWindow(QMainWindow):
             # Load lsl_recorded_data.json
             lsl_file = tracking_dir / "lsl_recorded_data.json"
             print(f"[SessionReview] Checking for LSL file: {lsl_file}")
+            lsl_session_start_time = None  # Will extract from LSL metadata
             if lsl_file.exists():
                 try:
                     with open(lsl_file, 'r', encoding='utf-8') as f:
                         lsl_data = json.load(f)
                         # Extract recorded samples (structure: lsl_samples array)
                         self.lsl_data = lsl_data.get('lsl_samples', [])
+                        # Extract session_start_time from metadata for offset calculation
+                        lsl_session_start_time = lsl_data.get('session_start_time')
                     print(f"[SessionReview] Loaded {len(self.lsl_data)} LSL samples")
+                    if lsl_session_start_time:
+                        print(f"[SessionReview] LSL session_start_time: {lsl_session_start_time:.6f}s")
                 except Exception as e:
                     print(f"[SessionReview] Error loading LSL data: {e}")
                     import traceback
@@ -2372,6 +2392,37 @@ class SessionReviewWindow(QMainWindow):
                         self.video_cap = None
             else:
                 print(f"[SessionReview] Video file not found: {video_file}")
+            
+            # Load recording metadata for precise video-event alignment
+            info_file = tracking_dir / f"screen_recording_info_{self.session.session_id}.json"
+            if info_file.exists():
+                try:
+                    with open(info_file, 'r', encoding='utf-8') as f:
+                        recording_info = json.load(f)
+                    lsl_first_frame_time = recording_info.get('lsl_first_frame_time')
+                    if lsl_first_frame_time and lsl_session_start_time is not None:
+                        # Convert absolute LSL time to relative time (from session start)
+                        lsl_first_frame_relative = lsl_first_frame_time - lsl_session_start_time
+                        self.video_lsl_offset = lsl_first_frame_relative
+                        print(f"[SessionReview] Video offset (relative): {lsl_first_frame_relative:.6f}s (absolute first-frame: {lsl_first_frame_time:.6f}s - session_start: {lsl_session_start_time:.6f}s)")
+                    elif lsl_first_frame_time:
+                        # Fallback if session_start_time not available: use absolute time
+                        self.video_lsl_offset = lsl_first_frame_time
+                        print(f"[SessionReview] WARNING: Using absolute first-frame LSL time (session_start_time not available): {lsl_first_frame_time:.6f}s")
+                    else:
+                        # Fallback: use recording start time if first-frame not available
+                        lsl_start_time = recording_info.get('lsl_recording_start_time')
+                        if lsl_start_time and lsl_session_start_time is not None:
+                            lsl_start_time_relative = lsl_start_time - lsl_session_start_time
+                            self.video_lsl_offset = lsl_start_time_relative
+                            print(f"[SessionReview] Using recording-start LSL time (relative): {lsl_start_time_relative:.6f}s")
+                        elif lsl_start_time:
+                            self.video_lsl_offset = lsl_start_time
+                            print(f"[SessionReview] WARNING: Using absolute recording-start time (session_start_time not available): {lsl_start_time:.6f}s")
+                except Exception as e:
+                    print(f"[SessionReview] Could not load recording metadata: {e}")
+            else:
+                print(f"[SessionReview] Recording info file not found: {info_file}")
         else:
             print(f"[SessionReview] Tracking directory does not exist: {tracking_dir}")
         
