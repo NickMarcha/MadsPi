@@ -1735,12 +1735,20 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         tracking_dir = self.project.project_path / "tracking_data" / self.session.session_id
         
         try:
+            # Create a callback to send sync events through LSL streamer when recording starts
+            def on_video_recording_started(sync_event):
+                """Callback when screen recording starts - sends sync event to LSL."""
+                # This will be called by the screen recorder with the sync event
+                if self.lsl_streamer:
+                    self.lsl_streamer.push_event(sync_event)
+            
             # Create screen recorder - pass self (the window) to record only this window
             self.screen_recorder = ScreenRecorder(
                 session_id=self.session.session_id,
                 config=config,
                 output_dir=tracking_dir,
-                window=self  # Record only this window
+                window=self,  # Record only this window
+                on_recording_started=on_video_recording_started  # Send sync event when recording starts
             )
             
             # Start recording

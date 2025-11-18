@@ -10,6 +10,13 @@
 - Capture screen video aligned with event markers from HTML bridges
 - Enable post-hoc analysis with temporally-synchronized multi-modal data
 
+### Documentation Policy (AI Agents)
+
+- **Do not create new standalone Markdown files** in the repository unless explicitly requested by a human maintainer. Prefer adding or updating sections in `README.md` or `.github/copilot-instructions.md` to avoid documentation sprawl.
+- If substantial new documentation is required and a new file is approved, place it under a dedicated docs/ folder and confirm with the repo owner before committing.
+- When modifying documentation, summarize the changes in the commit message and update `README.md` when material affects project usage or developer workflows.
+
+
 ---
 
 ## Architecture Essentials
@@ -300,6 +307,158 @@ Output files:
 
 ---
 
+## Phase 3 Development Goals (Target: Nov 25, 2025)
+
+### 1. Data Export System (HIGH PRIORITY)
+
+**Current Issue:** Export only includes project metadata, not actual tracking data
+
+**Implementation Targets:**
+- `project_manager.py`: Add `export_session_data(session_id, format='json', include_video=False)` method
+  - Formats: 'json' (full structure) | 'csv' (flattened tables)
+  - Include options: tracking_data, events, mouse, video metadata
+  - Sanitization: timestamp normalization, PII filtering if needed
+
+- `main_window.py`: Add export dialogs
+  - Session export dialog (single session selector)
+  - Project export dialog (all sessions or date range selector)
+  - Format selector (JSON, CSV, or both)
+  - Preview before export
+
+**Data to include:**
+- LSL streams: All recorded streams with timestamps
+- Bridge events: All HTML events with sync info
+- Mouse tracking: X, Y coordinates with event types
+- Video metadata: Resolution, FPS, codec, duration
+- Sync markers: video_recording_started with offset
+
+**CSV Column Structure Example:**
+```
+timestamp,stream_name,channel_index,data_value,clock_offset,event_type
+671.234,MadsPipeline_BridgeEvents,0,page_load,0.001,marker
+671.345,MadsPipeline_MouseTracking,0,1920,0.002,numeric
+671.345,MadsPipeline_MouseTracking,1,1080,0.002,numeric
+```
+
+### 2. LSL Stream Synchronization Testing (HIGH PRIORITY)
+
+**Current Issue:** Only mouse tracking tested; hardware streams (EmotiBit, Tobii) untested
+
+**Implementation Targets:**
+- `tests/integration/test_lsl_sync.py`: New test module
+  - Test LSL clock sync with mock device streams
+  - Validate clock_offset calculations
+  - Test sync marker accuracy (±10ms tolerance)
+  - Test with multiple simultaneous streams
+
+- `lsl_integration.py`: Add sync validation helpers
+  ```python
+  def validate_stream_sync(stream_name, samples, tolerance_ms=10):
+      """Verify samples are chronologically ordered and within tolerance."""
+  
+  def calculate_clock_drift(samples):
+      """Return clock drift statistics for stream."""
+  ```
+
+- Documentation: Sync validation procedures
+  - Expected offset ranges per device
+  - Clock drift acceptable limits
+  - Post-hoc correction algorithm
+
+### 3. LSL Stream Management Overhaul (HIGH PRIORITY)
+
+**Current Issue:** Cannot select which channels/types to record per device
+
+**Implementation Targets:**
+- `models.py`: Enhance `LSLConfig`
+  ```python
+  @dataclass
+  class StreamProfile:
+      stream_name: str
+      stream_type: str
+      channels_to_record: List[str] = field(default_factory=list)  # [] = all
+      enabled: bool = True
+  
+  @dataclass
+  class LSLConfig:
+      profiles: List[StreamProfile] = field(default_factory=list)
+      # existing fields...
+  ```
+
+- `lsl_manager.py`: Redesigned UI
+  - Device/stream list showing available channels
+  - Checkbox UI for channel selection
+  - Preview panel showing what will be recorded
+  - "Save Profile" button to persist configuration
+  - "Refresh Streams" button (already exists, verify)
+
+- `lsl_integration.py`: Update `LSLRecorder`
+  - Respect `channels_to_record` when recording
+  - Skip disabled streams
+  - Handle empty channel lists (record all)
+
+### 4. Video Playback Alignment Testing (HIGH PRIORITY)
+
+**Current Issue:** Need to verify video resolution matches events and sync markers are accurate
+
+**Implementation Targets:**
+- Create test fixture: Generate recording with known events
+  - Create 10-second test HTML page
+  - Emit events at t=1s, 3s, 5s, 7s
+  - Record video at 30 FPS (300 frames total)
+  - Verify sync marker, video duration, event alignment
+
+- `tests/integration/test_video_playback_alignment.py`
+  - Test video resolution (1920x1080, 1280x720, etc.)
+  - Verify video_recording_started event present
+  - Calculate offset: `offset = sync_event['lsl_timestamp']`
+  - Validate all events: `video_time = event['timestamp'] - offset`
+  - Check for negative times (events before recording start)
+  - Verify frame count matches video duration
+
+- `screen_recorder.py`: Add playback metadata
+  - Store in `get_recording_info()`: frame_count, duration_seconds, expected_frames
+  - Validate in test: `frame_count == fps * duration_seconds`
+
+### 5. UI/UX Improvements (MEDIUM PRIORITY)
+
+**Disable Debug Session Button:**
+- `main_window.py`: Find debug session button creation
+- Add `button.setEnabled(False)` or hide button
+- Add comment: `# TODO: Re-enable after Phase 3 completion`
+
+**Add "Open Folder in Explorer" Button:**
+- `main_window.py`: In project overview/dashboard
+- When clicked: `os.startfile(project_path)` (Windows) | `subprocess.Popen(['open', project_path])` (macOS)
+- Add tooltip: "Open project folder in file explorer"
+- Same for individual sessions: "Open session folder"
+
+### 6. Project File Structure Audit (MEDIUM PRIORITY)
+
+**Current Issue:** Some redundancy in tracking_data structure; confusing layout
+
+**Analysis Checklist:**
+- [ ] Compare session data files (duplicates between JSON and legacy formats?)
+- [ ] Are video metadata + video file properly linked?
+- [ ] Is mouse tracking stored in multiple places?
+- [ ] Can we consolidate LSL recordings and bridge events?
+- [ ] Should video frames be separate file or in JSON?
+
+**Audit steps:**
+1. Create test session, record data
+2. Examine `tracking_data/{project_id}/sessions/{session_id}/` directory
+3. Document each file's purpose and data
+4. Identify redundancies
+5. Propose optimized structure
+6. Create migration utility if needed
+
+**Likely findings to address:**
+- Consolidate `tracking_data.json` + `lsl_recording_{session_id}.json`
+- Consider storing video resolution/codec in screen_recording_info.json instead of redundantly
+- Flatten directory if too deeply nested
+
+---
+
 ## Testing Priorities
 
 - **Unit:** models.py (enum conversions, config dataclasses), project_manager.py persistence
@@ -321,14 +480,23 @@ Run: `pytest tests/integration/test_embedded_webpage_session.py` for critical pa
 - main_window.py: ScreenRecorder now sends video_recording_started event ✅
 - See VIDEO_EVENT_SYNC_GUIDE.md for playback usage ✅
 
+**Phase 3 Goals (Current Sprint - Nov 25 deadline):**
+- Data export (CSV/JSON, session/project level)
+- LSL sync testing for all device types
+- LSL Manager UI overhaul (channel selection)
+- Video playback validation
+- Minor UI fixes (disable debug, add explorer button)
+- Project structure audit & optimization
+
 ---
 
 ## When You're Stuck
 
-1. **Timeline/timestamp issues** → Check LSL_SYNC_QUICKREF.md + VIDEO_EVENT_SYNC_GUIDE.md
+1. **Timeline/timestamp issues** → Check README "Video & Event Timestamp Synchronization" section
 2. **LSL stream not appearing** → Run lsl_manager.py dialog "Refresh Streams" + check device connected
 3. **Video not aligning with events** → Verify video_recording_started event was sent; check sync marker in JSON
 4. **HTML bridge events not firing** → Check madsBridge.js loaded + bridge.receiveMessage callable from JS
 5. **Project won't load** → Check project_manager.py JSON deserialization + Project.from_dict()
+6. **Export not working** → Check project_manager.py has export_session_data() method; verify format parameter
 
 **Debug level:** Run with `--verbose` flag or add print statements; all output visible in VS Code Debug Console.

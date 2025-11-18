@@ -4,7 +4,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Callable
 import queue
 import platform
 
@@ -16,6 +16,13 @@ try:
 except ImportError as e:
     RECORDING_AVAILABLE = False
     IMPORT_ERROR = str(e)
+
+# Try to import LSL for timestamp synchronization
+try:
+    from pylsl import local_clock
+    LSL_AVAILABLE = True
+except ImportError:
+    LSL_AVAILABLE = False
 
 # Windows-specific imports for accurate window capture
 if platform.system() == 'Windows':
@@ -34,7 +41,8 @@ from .models import ScreenRecordingConfig
 class ScreenRecorder:
     """Records screen during a session using mss for capture and opencv for encoding."""
     
-    def __init__(self, session_id: str, config: ScreenRecordingConfig, output_dir: Path, window=None):
+    def __init__(self, session_id: str, config: ScreenRecordingConfig, output_dir: Path, window=None, 
+                 on_recording_started: Optional[Callable[[Dict[str, Any]], None]] = None):
         """Initialize screen recorder.
         
         Args:
@@ -42,6 +50,12 @@ class ScreenRecorder:
             config: Screen recording configuration
             output_dir: Directory to save the recording
             window: Optional QWidget/QWindow to record (if None, records full screen)
+            on_recording_started: Optional callback to invoke when recording starts.
+                                  Will be called with sync event data containing:
+                                  - type: 'video_recording_started'
+                                  - lsl_timestamp: LSL synchronized timestamp
+                                  - wall_clock: ISO format wall clock time
+                                  - session_id: Session ID
         """
         if not RECORDING_AVAILABLE:
             raise RuntimeError(f"Screen recording dependencies not available: {IMPORT_ERROR}")
@@ -51,11 +65,13 @@ class ScreenRecorder:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.window = window  # Window to record (None = full screen)
+        self.on_recording_started = on_recording_started  # Callback for sync event
         
         self.is_recording = False
         self.frames: queue.Queue = queue.Queue()
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
+        self.lsl_start_time: Optional[float] = None  # LSL timestamp when recording started
         
         # Threading
         self.capture_thread: Optional[threading.Thread] = None
@@ -208,6 +224,44 @@ class ScreenRecorder:
         
         if not self.video_writer.isOpened():
             raise RuntimeError(f"Failed to open video writer for {self.video_path}")
+        
+        # Capture LSL timestamp for sync event (if available)
+        if LSL_AVAILABLE:
+            self.lsl_start_time = local_clock()
+        
+        # Send sync event to indicate video recording has started
+        # Build event using the same shape as bridge events so LSLRecorder parsing is consistent.
+        if self.on_recording_started:
+            # Primary event (immediate)
+            sync_event = {
+                'data': {
+                    'lsl_timestamp': self.lsl_start_time if (LSL_AVAILABLE and self.lsl_start_time is not None) else None,
+                    'session_id': self.session_id
+                },
+                'timestamp': self.lsl_start_time if (LSL_AVAILABLE and self.lsl_start_time is not None) else datetime.now().timestamp(),
+                'type': 'video_recording_started',
+                'wall_clock': datetime.now().isoformat()
+            }
+
+            def _send_sync(event):
+                try:
+                    self.on_recording_started(event)
+                    print(f"[ScreenRecorder] Sent video_recording_started sync event: {event}")
+                except Exception as e:
+                    print(f"[ScreenRecorder] Error sending sync event: {e}")
+
+            # Send immediately
+            _send_sync(sync_event)
+
+            # Also resend after a short delay to ensure the LSL recorder/inlets have time to capture it
+            try:
+                import threading
+                resend_timer = threading.Timer(0.5, _send_sync, args=(sync_event,))
+                resend_timer.daemon = True
+                resend_timer.start()
+            except Exception:
+                # If timer fails for any reason, ignore (best-effort)
+                pass
         
         # Start capture thread
         self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
@@ -440,7 +494,7 @@ class ScreenRecorder:
         """Get information about the current recording.
         
         Returns:
-            Dictionary with recording metadata
+            Dictionary with recording metadata including sync time for event alignment
         """
         info = {
             'is_recording': self.is_recording,
@@ -450,7 +504,9 @@ class ScreenRecorder:
             'resolution': (self.output_width, self.output_height),
             'capture_region': (self.record_x, self.record_y, self.record_width, self.record_height),
             'fps': self.config.fps,
-            'quality': self.config.recording_quality
+            'quality': self.config.recording_quality,
+            # LSL sync information for event alignment
+            'lsl_recording_start_time': self.lsl_start_time  # Use this to offset event timestamps
         }
         
         if self.start_time and self.end_time:
