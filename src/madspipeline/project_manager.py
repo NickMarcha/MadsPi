@@ -115,19 +115,14 @@ class ProjectManager:
         if project_path.exists():
             raise ValueError(f"Project '{name}' already exists at {project_path}")
         
-        # Create project directory structure
+        # Create minimal project directory structure
+        # Only create folders that are actively used and may be accessed before files are written
         project_path.mkdir(parents=True, exist_ok=True)
         (project_path / "sessions").mkdir(parents=True, exist_ok=True)
         # Note: All session data (including recordings) is now stored in sessions/{session_id}/
         (project_path / "exports").mkdir(exist_ok=True)
-        
-        # Create type-specific subdirectories
-        if project_type == ProjectType.PICTURE_SLIDESHOW:
-            (project_path / "images").mkdir(exist_ok=True)
-        elif project_type == ProjectType.VIDEO:
-            (project_path / "videos").mkdir(exist_ok=True)
-        elif project_type == ProjectType.EMBEDDED_WEBPAGE:
-            (project_path / "webpages").mkdir(exist_ok=True)
+        # Note: Other folders (images, videos, webpages) are created on-demand by safe_write functions
+        # when files are actually written to them
         
         # Initialize type-specific configurations
         picture_slideshow_config = None
@@ -245,8 +240,9 @@ class ProjectManager:
             if data is None:
                 raise ValueError(f"Could not read project.json from {project_path}")
             logger.debug("Project JSON loaded")
-        
-            project = Project.from_dict(data)
+            
+            # Pass project_path explicitly - it's derived from the directory, not stored in JSON
+            project = Project.from_dict(data, project_path=project_path)
             logger.info(f"Project loaded: {project.name}")
         except Exception as e:
             logger.error(f"Error loading project: {e}", exc_info=True)

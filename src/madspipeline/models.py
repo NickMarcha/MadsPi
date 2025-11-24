@@ -185,15 +185,20 @@ class Project:
             'project_type': self.project_type.value,
             'created_date': self.created_date.isoformat(),
             'modified_date': self.modified_date.isoformat(),
-            'project_path': str(self.project_path),
+            # Note: 'project_path' is NOT stored in JSON - it's derived from the directory containing project.json
             # Note: 'sessions' is no longer stored - sessions are discovered from filesystem
             'version': self.version,
             'config': config_data
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Project':
-        """Create project from dictionary."""
+    def from_dict(cls, data: Dict[str, Any], project_path: Path) -> 'Project':
+        """Create project from dictionary.
+        
+        Args:
+            data: Dictionary containing project data
+            project_path: Path to project directory (required - derived from location of project.json)
+        """
         project_type = ProjectType(data['project_type'])
         
         # Initialize type-specific configs
@@ -273,13 +278,16 @@ class Project:
                 lsl_config=lsl_config
             )
         
+        # project_path is required parameter - derived from directory containing project.json
+        project_path = Path(project_path)
+        
         return cls(
             name=data['name'],
             description=data['description'],
             project_type=project_type,
             created_date=datetime.fromisoformat(data['created_date']),
             modified_date=datetime.fromisoformat(data['modified_date']),
-            project_path=Path(data['project_path']),
+            project_path=project_path,
             sessions=[],  # Always empty on load - sessions are discovered from filesystem by ProjectManager
             version=data.get('version', '1.0'),  # Default to 1.0 for old projects
             picture_slideshow_config=picture_slideshow_config,
