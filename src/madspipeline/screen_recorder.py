@@ -1,5 +1,6 @@
 """Screen recording functionality using mss and opencv-python."""
 
+import logging
 import threading
 import time
 from datetime import datetime
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, Callable
 import queue
 import platform
+
+logger = logging.getLogger(__name__)
 
 try:
     import mss
@@ -105,9 +108,9 @@ class ScreenRecorder:
                     self.record_width = rect.right - rect.left
                     self.record_height = rect.bottom - rect.top
                     self.dpr = 1.0  # Windows API already returns physical pixels
-                    print(f"[ScreenRecorder] Window rect from Windows API: {self.record_x}, {self.record_y}, {self.record_width}x{self.record_height}")
+                    logger.debug(f"[ScreenRecorder] Window rect from Windows API: {self.record_x}, {self.record_y}, {self.record_width}x{self.record_height}")
                 except Exception as e:
-                    print(f"[ScreenRecorder] Failed to get window rect from Windows API: {e}, falling back to Qt")
+                    logger.warning(f"[ScreenRecorder] Failed to get window rect from Windows API: {e}, falling back to Qt")
                     # Fallback to Qt method
                     self._init_window_geometry_qt()
             else:
@@ -165,7 +168,7 @@ class ScreenRecorder:
             self.record_width = logical_width
             self.record_height = logical_height
             self.dpr = dpr
-            print(f"[ScreenRecorder] Window geometry from Qt: {self.record_x}, {self.record_y}, {self.record_width}x{self.record_height} (DPR: {self.dpr})")
+            logger.debug(f"[ScreenRecorder] Window geometry from Qt: {self.record_x}, {self.record_y}, {self.record_width}x{self.record_height} (DPR: {self.dpr})")
         else:
             # Fallback: use frame geometry without DPI scaling
             self.record_x = frame_geom.x()
@@ -177,7 +180,7 @@ class ScreenRecorder:
     def start_recording(self):
         """Start screen recording."""
         if self.is_recording:
-            print("Warning: Recording already in progress")
+            logger.warning("Recording already in progress")
             return
         
         self.is_recording = True
@@ -218,7 +221,7 @@ class ScreenRecorder:
         if codec is None:
             raise RuntimeError("No suitable video codec found. Please ensure OpenCV is built with codec support.")
         
-        print(f"Using codec: {codec_name}")
+        logger.info(f"Using codec: {codec_name}")
         
         self.video_writer = cv2.VideoWriter(
             str(self.video_path),
@@ -251,9 +254,9 @@ class ScreenRecorder:
             def _send_sync(event):
                 try:
                     self.on_recording_started(event)
-                    print(f"[ScreenRecorder] Sent video_recording_started sync event: {event}")
+                    logger.debug(f"[ScreenRecorder] Sent video_recording_started sync event: {event}")
                 except Exception as e:
-                    print(f"[ScreenRecorder] Error sending sync event: {e}")
+                    logger.warning(f"[ScreenRecorder] Error sending sync event: {e}")
 
             # Send immediately
             _send_sync(sync_event)
@@ -272,7 +275,7 @@ class ScreenRecorder:
         self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.capture_thread.start()
         
-        print(f"Screen recording started: {self.video_path}")
+        logger.info(f"Screen recording started: {self.video_path}")
     
     def _capture_loop(self):
         """Capture screen frames in a separate thread."""
@@ -455,12 +458,12 @@ class ScreenRecorder:
                                     # Always update last-frame LSL timestamp for precise end marker
                                     self.lsl_last_frame_time = now_lsl
                         else:
-                            print(f"Warning: Invalid capture region: {capture_region}")
+                            logger.warning(f"Invalid capture region: {capture_region}")
                         
                         last_capture_time = current_time
                         
                     except Exception as e:
-                        print(f"Error capturing frame: {e}")
+                        logger.error(f"Error capturing frame: {e}", exc_info=True)
                         import traceback
                         traceback.print_exc()
                         # Continue trying to capture
@@ -475,7 +478,7 @@ class ScreenRecorder:
             Path to the saved video file, or None if recording failed
         """
         if not self.is_recording:
-            print("Warning: Not recording")
+            logger.warning("Not recording")
             return None
         
         self.is_recording = False
@@ -519,12 +522,12 @@ class ScreenRecorder:
         # Calculate duration
         if self.start_time and self.end_time:
             duration = (self.end_time - self.start_time).total_seconds()
-            print(f"Screen recording stopped. Duration: {duration:.2f}s")
+            logger.info(f"Screen recording stopped. Duration: {duration:.2f}s")
         
         # Return video path if file exists
         if self.video_path and self.video_path.exists():
             file_size = self.video_path.stat().st_size / (1024 * 1024)  # MB
-            print(f"Screen recording saved: {self.video_path} ({file_size:.2f} MB)")
+            logger.info(f"Screen recording saved: {self.video_path} ({file_size:.2f} MB)")
             # Save diagnostics to object for later retrieval
             try:
                 self._last_actual_frame_count = actual_frame_count
@@ -552,14 +555,14 @@ class ScreenRecorder:
                     }
                     try:
                         self.on_recording_stopped(end_event)
-                        print(f"[ScreenRecorder] Sent video_recording_stopped sync event: {end_event}")
+                        logger.debug(f"[ScreenRecorder] Sent video_recording_stopped sync event: {end_event}")
                     except Exception as e:
-                        print(f"[ScreenRecorder] Error sending end sync event: {e}")
+                        logger.warning(f"[ScreenRecorder] Error sending end sync event: {e}")
             except Exception:
                 pass
             return self.video_path
         else:
-            print(f"Warning: Screen recording file not found: {self.video_path}")
+            logger.warning(f"Screen recording file not found: {self.video_path}")
             return None
     
     def get_recording_info(self) -> Dict[str, Any]:

@@ -66,7 +66,16 @@ class ConsoleLoggingWebPage(QWebEnginePage):
         level_name = level_names.get(level, "JS-UNKNOWN")
         
         # Format: [JS-LEVEL] source:line - message
-        print(f"[{level_name}] {source_id}:{line_number} - {message}")
+        # Use logging instead of print to avoid WinError on Windows
+        import logging
+        js_logger = logging.getLogger(f"{__name__}.javascript")
+        log_message = f"[{level_name}] {source_id}:{line_number} - {message}"
+        if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+            js_logger.error(log_message)
+        elif level == QWebEnginePage.JavaScriptConsoleMessageLevel.WarningMessageLevel:
+            js_logger.warning(log_message)
+        else:
+            js_logger.info(log_message)
         
         # Call parent method to maintain default behavior
         super().javaScriptConsoleMessage(level, message, line_number, source_id)
@@ -1348,6 +1357,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     session_ended = Signal(str)  # Emits session_id when session ends
     
     def __init__(self, project: Project, session: Session, parent=None):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         super().__init__(parent)
         self.project = project
         self.session = session
@@ -1462,7 +1474,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 if hasattr(QWebEngineSettings.WebAttribute, 'PlaybackRequiresUserGesture'):
                     settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
             except (AttributeError, TypeError):
-                print("Warning: Could not set PlaybackRequiresUserGesture - autoplay may require user interaction")
+                logger.warning("Could not set PlaybackRequiresUserGesture - autoplay may require user interaction")
         
         # Enable media features (only if available in this Qt version)
         try:
@@ -1493,7 +1505,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
             profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies)
         except Exception as e:
-            print(f"Warning: Could not configure web profile for media: {e}")
+            logger.warning(f"Could not configure web profile for media: {e}")
         
         # Also try setting via page profile (alternative method)
         try:
@@ -1515,6 +1527,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     
     def _apply_window_config(self):
         """Apply window size and fullscreen configuration."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         config = self.project.embedded_webpage_config
         if not config:
             return
@@ -1522,7 +1537,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         # Enforce fullscreen if configured (takes priority over window_size)
         if config.enforce_fullscreen:
             self.showFullScreen()
-            print(f"[SessionWindow] Enforced fullscreen mode")
+            logger.info("[SessionWindow] Enforced fullscreen mode")
         elif config.window_size:
             # Set fixed window size
             width, height = config.window_size
@@ -1532,11 +1547,11 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             x = (screen.width() - width) // 2
             y = (screen.height() - height) // 2
             self.move(x, y)
-            print(f"[SessionWindow] Enforced window size: {width}x{height}")
+            logger.info(f"[SessionWindow] Enforced window size: {width}x{height}")
         else:
             # Default: allow resizing but set minimum size
             self.setMinimumSize(1200, 800)
-            print(f"[SessionWindow] Using default window size (resizable)")
+            logger.info("[SessionWindow] Using default window size (resizable)")
     
     def _normalize_mouse_coordinates(self, x: float, y: float) -> tuple:
         """Normalize mouse coordinates relative to window size.
@@ -1550,6 +1565,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             If target_window_size is set, normalizes relative to that size.
             Otherwise, normalizes relative to current window size.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not self.normalize_mouse_coordinates:
             return (float(x), float(y))
         
@@ -1573,7 +1591,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             return (norm_x, norm_y)
         else:
             # Fallback: return absolute coordinates if size is invalid
-            print(f"[MouseTracking] Warning: Invalid window size for normalization ({ref_width}x{ref_height}), using absolute coordinates")
+            logger.warning(f"[MouseTracking] Invalid window size for normalization ({ref_width}x{ref_height}), using absolute coordinates")
             return (float(x), float(y))
     
     def _load_webpage(self):
@@ -1604,6 +1622,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     
     def _setup_bridge(self):
         """Set up QWebChannel bridge for HTML-to-Python communication."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
             # Create bridge instance
             self.bridge = Bridge()
@@ -1638,14 +1659,14 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                         self.lsl_streamer = LSLBridgeStreamer(self.session.session_id)
                     else:
                         self.lsl_streamer = None
-                        print("[LSL] Marker API stream disabled")
+                        logger.info("[LSL] Marker API stream disabled")
                     
                     # Create LSL streamer for mouse tracking if enabled
                     if lsl_config.enable_mouse_tracking:
                         self.lsl_mouse_streamer = LSLMouseTrackingStreamer(self.session.session_id)
                     else:
                         self.lsl_mouse_streamer = None
-                        print("[LSL] Mouse tracking stream disabled")
+                        logger.info("[LSL] Mouse tracking stream disabled")
                     
                     # Start BrainFlow streamer if configured (before recording starts)
                     self.brainflow_streamer = None
@@ -1655,12 +1676,12 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                             ip = getattr(lsl_config, 'brainflow_ip', None)
                             self.brainflow_streamer = EmotiBitBrainflowStreamer(ip_address=ip)
                             self.brainflow_streamer.start()
-                            print("[LSL] Started BrainFlow EmotiBit streamer")
+                            logger.info("[LSL] Started BrainFlow EmotiBit streamer")
                             # Give streamer time to start before resolving streams
                             import time
                             time.sleep(1.0)
                         except Exception as e:
-                            print(f"[LSL] Warning: Could not start BrainFlow streamer: {e}")
+                            logger.warning(f"[LSL] Could not start BrainFlow streamer: {e}")
                     
                     # Create LSL recorder. If project LSL config includes filters,
                     # pass them so only selected streams and channels are recorded.
@@ -1701,13 +1722,13 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                     
                     self.statusBar().showMessage("Bridge and LSL initialized successfully")
                 except Exception as e:
-                    print(f"Warning: Could not initialize LSL: {e}")
+                    logger.warning(f"Could not initialize LSL: {e}")
                     self.statusBar().showMessage(f"Bridge initialized, but LSL unavailable: {e}")
             else:
                 self.statusBar().showMessage("Bridge initialized (LSL not available)")
                 
         except Exception as e:
-            print(f"Error setting up bridge: {e}")
+            logger.error(f"Error setting up bridge: {e}", exc_info=True)
             self.statusBar().showMessage(f"Bridge setup error: {e}")
     
     def _safe_record_lsl_sample(self):
@@ -1745,7 +1766,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             self.statusBar().showMessage(f"Bridge event: {event_type}", 2000)
             
         except Exception as e:
-            print(f"Error handling bridge event: {e}")
+            logger.error(f"Error handling bridge event: {e}", exc_info=True)
     
     def _setup_tracking(self):
         """Set up tracking data collection."""
@@ -1762,8 +1783,11 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     
     def _setup_screen_recording(self):
         """Set up screen recording."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not RECORDING_AVAILABLE:
-            print("Warning: Screen recording not available (mss/opencv not installed)")
+            logger.warning("Screen recording not available (mss/opencv not installed)")
             return
         
         # Use default config if project doesn't have screen recording config
@@ -1806,7 +1830,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             self.screen_recorder.start_recording()
             self.statusBar().showMessage("Screen recording started", 2000)
         except Exception as e:
-            print(f"Warning: Could not start screen recording: {e}")
+            logger.warning(f"Could not start screen recording: {e}")
             self.statusBar().showMessage(f"Screen recording unavailable: {e}", 2000)
     
     def _collect_tracking_data(self):
@@ -1975,7 +1999,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             QTimer.singleShot(100, lambda: self.web_view.setUrl(QUrl("about:blank")))
             
         except Exception as e:
-            print(f"Warning: Could not stop video: {e}")
+            logger.warning(f"Could not stop video: {e}")
             # Fallback: just unload the page
             try:
                 self.web_view.setUrl(QUrl("about:blank"))
@@ -1992,9 +2016,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             try:
                 video_path = self.screen_recorder.stop_recording()
                 if video_path:
-                    print(f"Screen recording saved: {video_path}")
+                    logger.info(f"Screen recording saved: {video_path}")
             except Exception as e:
-                print(f"Error stopping screen recording: {e}")
+                logger.error(f"Error stopping screen recording: {e}", exc_info=True)
             self.screen_recorder = None
         
         # Stop LSL recording
@@ -2009,15 +2033,15 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             try:
                 self.lsl_recorder.stop_recording()
             except Exception as e:
-                print(f"Error stopping LSL recorder: {e}")
+                logger.error(f"Error stopping LSL recorder: {e}", exc_info=True)
         
         # Stop BrainFlow streamer if running
         if self.brainflow_streamer:
             try:
                 self.brainflow_streamer.stop()
-                print("[LSL] Stopped BrainFlow EmotiBit streamer")
+                logger.info("[LSL] Stopped BrainFlow EmotiBit streamer")
             except Exception as e:
-                print(f"[LSL] Warning: Error stopping BrainFlow streamer: {e}")
+                logger.warning(f"[LSL] Error stopping BrainFlow streamer: {e}")
             self.brainflow_streamer = None
         
         # Close LSL streamers
@@ -2063,9 +2087,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 info_file = tracking_dir / f"screen_recording_info_{self.session.session_id}.json"
                 with open(info_file, 'w', encoding='utf-8') as f:
                     json.dump(recording_info, f, indent=2)
-                print(f"Saved recording metadata to {info_file}")
+                logger.info(f"Saved recording metadata to {info_file}")
             except Exception as e:
-                print(f"Warning: Could not save recording metadata: {e}")
+                logger.warning(f"Could not save recording metadata: {e}")
         
         # Save LSL recorded data (this is the comprehensive record with all streams)
         # All data (bridge events, mouse tracking, etc.) goes through LSL
@@ -2083,11 +2107,11 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 self.lsl_recorder.save_to_file(str(lsl_file), additional_tracking_data=None)
                 
                 if sample_count > 0:
-                    print(f"Saved {sample_count} LSL samples to {lsl_file}")
+                    logger.info(f"Saved {sample_count} LSL samples to {lsl_file}")
                 else:
-                    print(f"Warning: LSL recorder has no recorded data, but saved empty file to {lsl_file}")
+                    logger.warning(f"LSL recorder has no recorded data, but saved empty file to {lsl_file}")
             except Exception as e:
-                print(f"Error saving LSL data: {e}")
+                logger.error(f"Error saving LSL data: {e}", exc_info=True)
                 import traceback
                 traceback.print_exc()
                 # Try to save at least the structure even if there's an error
@@ -2103,11 +2127,11 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                     }
                     with open(lsl_file, 'w', encoding='utf-8') as f:
                         json.dump(minimal_lsl_data, f, indent=2)
-                    print(f"Saved minimal LSL file structure to {lsl_file} (error occurred during save)")
+                    logger.warning(f"Saved minimal LSL file structure to {lsl_file} (error occurred during save)")
                 except Exception as e2:
-                    print(f"Could not save even minimal LSL file: {e2}")
+                    logger.error(f"Could not save even minimal LSL file: {e2}", exc_info=True)
         else:
-            print(f"Warning: LSL recorder is None, cannot save LSL data")
+            logger.warning(f"LSL recorder is None, cannot save LSL data")
         
         # Update session metadata (tracking_data_path removed - always sessions/{session_id}/)
         self.session.modified_date = datetime.now()
@@ -2444,6 +2468,9 @@ class SessionReviewWindow(QMainWindow):
     """Window for reviewing session data with video playback and overlays."""
     
     def __init__(self, project: Project, session: Session, project_manager, parent=None):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         super().__init__(parent)
         self.project = project
         self.session = session
@@ -2474,17 +2501,20 @@ class SessionReviewWindow(QMainWindow):
     
     def _load_session_data(self):
         """Load tracking data and LSL data for the session."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Try to find tracking data directory
         # All session data is now in sessions/{session_id}/
         tracking_dir = self.project.project_path / "sessions" / self.session.session_id
         
-        print(f"[SessionReview] Looking for LSL data in: {tracking_dir}")
+        logger.debug(f"[SessionReview] Looking for LSL data in: {tracking_dir}")
         
         # Load lsl_recording_{session_id}.json (all data is in LSL, no separate tracking_data.json)
         if tracking_dir and tracking_dir.exists():
             # Load lsl_recording_{session_id}.json (consistent naming)
             lsl_file = tracking_dir / f"lsl_recording_{self.session.session_id}.json"
-            print(f"[SessionReview] Checking for LSL file: {lsl_file}")
+            logger.debug(f"[SessionReview] Checking for LSL file: {lsl_file}")
             lsl_session_start_time = None  # Will extract from LSL metadata
             if lsl_file.exists():
                 try:
@@ -2494,15 +2524,13 @@ class SessionReviewWindow(QMainWindow):
                         self.lsl_data = lsl_data.get('lsl_samples', [])
                         # Extract session_start_time from metadata for offset calculation
                         lsl_session_start_time = lsl_data.get('session_start_time')
-                    print(f"[SessionReview] Loaded {len(self.lsl_data)} LSL samples")
+                    logger.info(f"[SessionReview] Loaded {len(self.lsl_data)} LSL samples")
                     if lsl_session_start_time:
-                        print(f"[SessionReview] LSL session_start_time: {lsl_session_start_time:.6f}s")
+                        logger.debug(f"[SessionReview] LSL session_start_time: {lsl_session_start_time:.6f}s")
                 except Exception as e:
-                    print(f"[SessionReview] Error loading LSL data: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"[SessionReview] Error loading LSL data: {e}", exc_info=True)
             else:
-                print(f"[SessionReview] LSL file not found: {lsl_file}")
+                logger.warning(f"[SessionReview] LSL file not found: {lsl_file}")
             
             # Load screen recording video
             video_file = tracking_dir / f"screen_recording_{self.session.session_id}.mp4"
@@ -2512,7 +2540,7 @@ class SessionReviewWindow(QMainWindow):
             
             if video_file.exists():
                 if not CV2_AVAILABLE:
-                    print(f"[SessionReview] opencv-python not available, cannot load video")
+                    logger.warning(f"[SessionReview] opencv-python not available, cannot load video")
                     self.video_cap = None
                 else:
                     try:
@@ -2521,17 +2549,15 @@ class SessionReviewWindow(QMainWindow):
                         if self.video_cap.isOpened():
                             self.video_fps = self.video_cap.get(cv2.CAP_PROP_FPS) or 30.0
                             self.video_frame_count = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                            print(f"[SessionReview] Loaded video: {video_file} ({self.video_frame_count} frames, {self.video_fps} FPS)")
+                            logger.info(f"[SessionReview] Loaded video: {video_file} ({self.video_frame_count} frames, {self.video_fps} FPS)")
                         else:
-                            print(f"[SessionReview] Could not open video file: {video_file}")
+                            logger.warning(f"[SessionReview] Could not open video file: {video_file}")
                             self.video_cap = None
                     except Exception as e:
-                        print(f"[SessionReview] Error loading video: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.error(f"[SessionReview] Error loading video: {e}", exc_info=True)
                         self.video_cap = None
             else:
-                print(f"[SessionReview] Video file not found: {video_file}")
+                logger.debug(f"[SessionReview] Video file not found: {video_file}")
             
             # Load recording metadata for precise video-event alignment
             info_file = tracking_dir / f"screen_recording_info_{self.session.session_id}.json"
@@ -2544,21 +2570,21 @@ class SessionReviewWindow(QMainWindow):
                         # Convert absolute LSL time to relative time (from session start)
                         lsl_first_frame_relative = lsl_first_frame_time - lsl_session_start_time
                         self.video_lsl_offset = lsl_first_frame_relative
-                        print(f"[SessionReview] Video offset (relative): {lsl_first_frame_relative:.6f}s (absolute first-frame: {lsl_first_frame_time:.6f}s - session_start: {lsl_session_start_time:.6f}s)")
+                        logger.debug(f"[SessionReview] Video offset (relative): {lsl_first_frame_relative:.6f}s (absolute first-frame: {lsl_first_frame_time:.6f}s - session_start: {lsl_session_start_time:.6f}s)")
                     elif lsl_first_frame_time:
                         # Fallback if session_start_time not available: use absolute time
                         self.video_lsl_offset = lsl_first_frame_time
-                        print(f"[SessionReview] WARNING: Using absolute first-frame LSL time (session_start_time not available): {lsl_first_frame_time:.6f}s")
+                        logger.warning(f"[SessionReview] Using absolute first-frame LSL time (session_start_time not available): {lsl_first_frame_time:.6f}s")
                     else:
                         # Fallback: use recording start time if first-frame not available
                         lsl_start_time = recording_info.get('lsl_recording_start_time')
                         if lsl_start_time and lsl_session_start_time is not None:
                             lsl_start_time_relative = lsl_start_time - lsl_session_start_time
                             self.video_lsl_offset = lsl_start_time_relative
-                            print(f"[SessionReview] Using recording-start LSL time (relative): {lsl_start_time_relative:.6f}s")
+                            logger.debug(f"[SessionReview] Using recording-start LSL time (relative): {lsl_start_time_relative:.6f}s")
                         elif lsl_start_time:
                             self.video_lsl_offset = lsl_start_time
-                            print(f"[SessionReview] WARNING: Using absolute recording-start time (session_start_time not available): {lsl_start_time:.6f}s")
+                            logger.warning(f"[SessionReview] Using absolute recording-start time (session_start_time not available): {lsl_start_time:.6f}s")
 
                     # Record actual frame count if available for frame-based mapping
                     try:
@@ -2568,13 +2594,16 @@ class SessionReviewWindow(QMainWindow):
                     except Exception:
                         self.video_actual_frame_count = None
                 except Exception as e:
-                    print(f"[SessionReview] Could not load recording metadata: {e}")
+                    logger.warning(f"[SessionReview] Could not load recording metadata: {e}")
             else:
-                print(f"[SessionReview] Recording info file not found: {info_file}")
+                logger.debug(f"[SessionReview] Recording info file not found: {info_file}")
         else:
-            print(f"[SessionReview] Tracking directory does not exist: {tracking_dir}")
+            logger.warning(f"[SessionReview] Tracking directory does not exist: {tracking_dir}")
         
         # Calculate session start time and duration from LSL data
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if self.lsl_data:
             try:
                 # Find first and last relative_time from LSL data
@@ -2611,24 +2640,22 @@ class SessionReviewWindow(QMainWindow):
                 
                 if first_time is not None and last_time is not None:
                     self.session_duration = last_time - first_time
-                    print(f"[SessionReview] Session duration from LSL: {self.session_duration:.2f}s")
+                    logger.info(f"[SessionReview] Session duration from LSL: {self.session_duration:.2f}s")
                 elif self.session.duration:
                     self.session_duration = self.session.duration
-                    print(f"[SessionReview] Using session.duration: {self.session_duration:.2f}s")
+                    logger.info(f"[SessionReview] Using session.duration: {self.session_duration:.2f}s")
                 else:
                     self.session_duration = 0.0
-                    print(f"[SessionReview] Could not calculate duration from LSL data")
+                    logger.warning(f"[SessionReview] Could not calculate duration from LSL data")
             except Exception as e:
-                print(f"[SessionReview] Error calculating duration: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"[SessionReview] Error calculating duration: {e}", exc_info=True)
                 if self.session.duration:
                     self.session_duration = self.session.duration
         elif self.session.duration:
             self.session_duration = self.session.duration
         else:
             self.session_duration = 0.0
-            print(f"[SessionReview] No LSL data and no session duration - setting to 0")
+            logger.warning(f"[SessionReview] No LSL data and no session duration - setting to 0")
     
     def _setup_ui(self):
         """Set up the review window UI."""
@@ -2848,6 +2875,9 @@ class SessionReviewWindow(QMainWindow):
     
     def _setup_plots(self):
         """Parse LSL data channels and set up graphs for numeric data."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not MATPLOTLIB_AVAILABLE or not hasattr(self, 'plot_axes'):
             return
         
@@ -2891,7 +2921,7 @@ class SessionReviewWindow(QMainWindow):
                 for ch_idx in sorted(self.plot_data[stream_name].keys()):
                     self.plot_channels.append((stream_name, ch_idx))
             
-            print(f"[SessionReview] Found {len(self.plot_channels)} numeric channels")
+            logger.info(f"[SessionReview] Found {len(self.plot_channels)} numeric channels")
             
             # Create checkboxes for each channel
             if hasattr(self, 'channel_layout'):
@@ -2914,12 +2944,13 @@ class SessionReviewWindow(QMainWindow):
             self._redraw_plots()
             
         except Exception as e:
-            print(f"[SessionReview] Error setting up plots: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"[SessionReview] Error setting up plots: {e}", exc_info=True)
     
     def _redraw_plots(self):
         """Redraw plots with current playback time indicator."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not MATPLOTLIB_AVAILABLE or not hasattr(self, 'plot_axes'):
             return
         
@@ -2980,7 +3011,7 @@ class SessionReviewWindow(QMainWindow):
             self.plot_canvas.draw()
             
         except Exception as e:
-            print(f"[SessionReview] Error redrawing plots: {e}")
+            logger.error(f"[SessionReview] Error redrawing plots: {e}", exc_info=True)
             import traceback
             traceback.print_exc()
     
@@ -3022,6 +3053,9 @@ class SessionReviewWindow(QMainWindow):
         Only shows bridge events and session start/stop events.
         Mouse events are shown in LSL data table instead.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Extract bridge events from LSL data (only source - no tracking_data)
         all_events = []
         for sample in self.lsl_data:
@@ -3044,11 +3078,11 @@ class SessionReviewWindow(QMainWindow):
         # Sort by relative_time
         all_events.sort(key=lambda e: e.get('relative_time', 0.0))
         
-        print(f"[SessionReview] Populating events table with {len(all_events)} events from LSL data")
+        logger.debug(f"[SessionReview] Populating events table with {len(all_events)} events from LSL data")
         self.events_table.setRowCount(len(all_events))
         
         if not all_events:
-            print("[SessionReview] No bridge events to display")
+            logger.info("[SessionReview] No bridge events to display")
             return
         
         for i, event in enumerate(all_events):
@@ -3156,7 +3190,10 @@ class SessionReviewWindow(QMainWindow):
         This method uses `self.lsl_filtered_indices` (list of indices into `self.lsl_data`)
         and `self.lsl_page` / `self.lsl_page_size` to determine which rows to show.
         """
-        print(f"[SessionReview] Populating LSL table with {len(self.lsl_data)} samples")
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.debug(f"[SessionReview] Populating LSL table with {len(self.lsl_data)} samples")
 
         # Initialize filter/page state if not present
         if not hasattr(self, 'lsl_filtered_indices'):
@@ -3271,6 +3308,9 @@ class SessionReviewWindow(QMainWindow):
 
     def _apply_lsl_filter(self):
         """Apply text filter to LSL data and reset to first page."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
             text = self.lsl_filter_edit.text().strip().lower() if hasattr(self, 'lsl_filter_edit') else ''
             if not text:
@@ -3287,7 +3327,7 @@ class SessionReviewWindow(QMainWindow):
                         filtered.append(i)
                 self.lsl_filtered_indices = filtered
         except Exception as e:
-            print(f"[SessionReview] Error applying LSL filter: {e}")
+            logger.error(f"[SessionReview] Error applying LSL filter: {e}", exc_info=True)
             self.lsl_filtered_indices = list(range(len(self.lsl_data)))
 
         # Reset to first page and repopulate
@@ -3430,6 +3470,9 @@ class SessionReviewWindow(QMainWindow):
     
     def _update_overlay(self):
         """Update mouse tracking overlay on video."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Update video frame if available
         if CV2_AVAILABLE and self.video_cap and self.video_cap.isOpened():
             try:
@@ -3466,7 +3509,7 @@ class SessionReviewWindow(QMainWindow):
                     
                     # Ensure we have valid dimensions
                     if w <= 0 or h <= 0:
-                        print(f"[SessionReview] Invalid video frame dimensions: {w}x{h}")
+                        logger.warning(f"[SessionReview] Invalid video frame dimensions: {w}x{h}")
                         return
                     
                     # Convert BGR to RGB
@@ -3528,7 +3571,7 @@ class SessionReviewWindow(QMainWindow):
                         self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, self.video_frame_count - 1))
             except Exception as e:
                 # Log error but don't crash - video might have issues
-                print(f"[SessionReview] Error updating video overlay: {e}")
+                logger.error(f"[SessionReview] Error updating video overlay: {e}", exc_info=True)
                 import traceback
                 traceback.print_exc()
         
@@ -3718,6 +3761,8 @@ class SessionReviewWindow(QMainWindow):
 
         If no such event exists, clear selection.
         """
+        import logging
+        logger = logging.getLogger(__name__)
         if not hasattr(self, 'events_table'):
             return
         row_to_select = None
@@ -3761,7 +3806,7 @@ class SessionReviewWindow(QMainWindow):
             else:
                 self.events_table.clearSelection()
         except Exception as e:
-            print(f"[SessionReview] Error highlighting event: {e}")
+            logger.error(f"[SessionReview] Error highlighting event: {e}", exc_info=True)
 
 
 class MainWindow(QMainWindow):
@@ -3855,6 +3900,9 @@ class MainWindow(QMainWindow):
     
     def _on_new_session(self):
         """Handle new session request."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if self.current_project.project_type == ProjectType.EMBEDDED_WEBPAGE:
             # Show session creation dialog
             dialog = SessionCreationDialog(self.current_project, self)
@@ -3888,6 +3936,7 @@ class MainWindow(QMainWindow):
                         self.project_dashboard.refresh_project_data(self.current_project)
                     
                 except Exception as e:
+                    logger.error(f"Failed to create session: {e}", exc_info=True)
                     QMessageBox.critical(self, "Error", f"Failed to create session: {e}")
         else:
             # TODO: Implement other project type sessions
@@ -4034,7 +4083,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Success", "LSL configuration saved successfully!")
                 
             except Exception as e:
-                print(f"Error saving LSL configuration: {e}")
+                logger.error(f"Error saving LSL configuration: {e}", exc_info=True)
                 import traceback
                 traceback.print_exc()
                 QMessageBox.critical(self, "Error", f"Failed to save LSL configuration: {e}")

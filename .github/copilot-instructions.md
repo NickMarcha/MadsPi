@@ -217,7 +217,32 @@ screen_recorder = ScreenRecorder(
 
 **Why:** Decouples components; screen_recorder doesn't need to know about LSL.
 
-### 5. Project Type Specialization
+### 5. Logging Instead of Print (CRITICAL)
+**Status:** All `print()` statements have been replaced with logging to prevent WinError on Windows.
+
+**Pattern:**
+```python
+import logging
+logger = logging.getLogger(__name__)
+
+# Use appropriate log levels:
+logger.debug("Detailed debugging information")
+logger.info("General informational messages")
+logger.warning("Warning messages (non-critical issues)")
+logger.error("Error messages", exc_info=True)  # Use exc_info=True for exceptions
+```
+
+**Why:** On Windows, `print()` can cause "WinError 1: Incorrect function" when stdout is redirected or unavailable. The logging module handles this gracefully.
+
+**When writing new code:**
+- **NEVER use `print()`** - always use `logger.info()`, `logger.warning()`, `logger.error()`, etc.
+- Add `import logging` and `logger = logging.getLogger(__name__)` at the start of each method/class that needs logging
+- For exceptions, use `logger.error(f"Error message: {e}", exc_info=True)` to include traceback
+- For JavaScript console messages, use a separate logger: `js_logger = logging.getLogger(f"{__name__}.javascript")`
+
+**Exception:** Test files (`tests/`) may use `print()` for test output, but prefer logging there too.
+
+### 6. Project Type Specialization
 **Pattern:** Each ProjectType has a dedicated config class + session window class
 
 | Type | Config Class | Session Window | Key Feature |

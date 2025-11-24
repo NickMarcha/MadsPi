@@ -192,8 +192,8 @@ class ProjectManager:
         # Check if migration is needed (but don't run migrations automatically)
         from .migrations import CURRENT_VERSION
         if project.version != CURRENT_VERSION:
-            print(f"Note: Project '{project.name}' is version {project.version}, "
-                  f"current version is {CURRENT_VERSION}. Migration may be needed.")
+            logger.info(f"Note: Project '{project.name}' is version {project.version}, "
+                       f"current version is {CURRENT_VERSION}. Migration may be needed.")
         
         # Scan sessions folder to find all sessions (instead of using project.sessions list)
         sessions_dir = project_path / "sessions"
@@ -226,7 +226,7 @@ class ProjectManager:
                         project = self.load_project(project_dir)
                         projects.append(project)
                     except Exception as e:
-                        print(f"Error loading project {project_dir}: {e}")
+                        logger.warning(f"Error loading project {project_dir}: {e}")
         
         return projects
     
@@ -337,7 +337,7 @@ class ProjectManager:
             with open(lsl_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Error loading LSL data for session {session.session_id}: {e}")
+            logger.warning(f"Error loading LSL data for session {session.session_id}: {e}")
             return None
     
     def _load_session_video_info(self, session: Session, project: Optional[Project] = None) -> Optional[Dict[str, Any]]:
@@ -363,7 +363,7 @@ class ProjectManager:
             with open(info_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Error loading video info for session {session.session_id}: {e}")
+            logger.warning(f"Error loading video info for session {session.session_id}: {e}")
             return None
     
     def export_session_data(self, project: Project, session: Session, 
@@ -710,7 +710,7 @@ class ProjectManager:
                 data = json.load(f)
             return Session.from_dict(data)
         except Exception as e:
-            print(f"Error loading session {session_id}: {e}")
+            logger.warning(f"Error loading session {session_id}: {e}")
             return None
     
     def _load_session_tracking_data(self, session: Session, project: Project) -> List[TrackingData]:
@@ -733,7 +733,7 @@ class ProjectManager:
                     data = json.load(f)
                 tracking_data.append(TrackingData.from_dict(data))
         except Exception as e:
-            print(f"Error loading tracking data for session {session.session_id}: {e}")
+            logger.warning(f"Error loading tracking data for session {session.session_id}: {e}")
         
         # Sort by timestamp
         tracking_data.sort(key=lambda x: x.timestamp)
@@ -769,5 +769,5 @@ class ProjectManager:
                 return False
                 
         except Exception as e:
-            print(f"Error deleting session {session_id}: {e}")
+            logger.error(f"Error deleting session {session_id}: {e}", exc_info=True)
             return False

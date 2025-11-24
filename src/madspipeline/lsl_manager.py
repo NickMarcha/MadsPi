@@ -15,12 +15,15 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, Signal, QThread, QThread
 from PySide6.QtGui import QFont
 
+import logging
+logger = logging.getLogger(__name__)
+
 try:
     from pylsl import StreamInfo, StreamOutlet, StreamInlet, resolve_streams, local_clock
     LSL_AVAILABLE = True
 except ImportError:
     LSL_AVAILABLE = False
-    print("Warning: pylsl not available. LSL integration will be disabled.")
+    logger.warning("pylsl not available. LSL integration will be disabled.")
 
 from .models import Project, LSLConfig
 from .lsl_integration import LSLBridgeStreamer, LSLMouseTrackingStreamer, LSLRecorder, LSL_AVAILABLE as LSL_INTEGRATION_AVAILABLE
