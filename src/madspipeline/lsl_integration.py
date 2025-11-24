@@ -283,9 +283,11 @@ class LSLRecorder:
                 logger.info(f"Processing stream {idx+1}/{len(filtered_streams)}: {stream_name}")
                 try:
                     logger.debug(f"Creating StreamInlet for {stream_name}")
+                    # Note: pyLSL Python bindings don't support postproc_flags in constructor
+                    # We'll apply clock synchronization manually by adding clock_offset to timestamps
                     inlet = StreamInlet(stream)
                     self.inlets.append(inlet)
-                    logger.info(f"Inlet created successfully for {stream_name}")
+                    logger.info(f"Inlet created successfully for {stream_name} (clock sync will be applied manually)")
                 except Exception as e:
                     logger.error(f"Failed to create inlet for {stream_name}: {e}", exc_info=True)
                     continue
@@ -438,13 +440,19 @@ class LSLRecorder:
                             logger.warning(f"Error filtering channels for {stream_name}: {e}, recording all channels")
                             filtered_sample = sample
                     
-                    # Calculate relative timestamp from session start
-                    relative_time = timestamp - self.session_start_time if self.session_start_time else 0.0
-                    
                     # Get clock offset for synchronization (CRITICAL for multi-device alignment)
                     # The clock offset represents the difference between the remote device's clock
                     # and the local machine's clock. This is essential for proper synchronization.
                     clock_offset = inlet.time_correction()  # Returns offset in seconds
+                    
+                    # Apply clock synchronization manually (pyLSL doesn't support postproc_flags)
+                    # The timestamp from pull_sample() is in the remote device's clock domain.
+                    # We add the clock offset to synchronize it to the local time domain.
+                    original_timestamp = timestamp  # Original device timestamp
+                    synchronized_timestamp = timestamp + clock_offset  # Synchronized to local time domain
+                    
+                    # Calculate relative timestamp from session start (using synchronized time)
+                    relative_time = synchronized_timestamp - self.session_start_time if self.session_start_time else 0.0
                     
                     # Record the sample (with filtered channels if applicable)
                     stream_info_copy = self.stream_info[i].copy()
@@ -471,15 +479,17 @@ class LSLRecorder:
                     
                     # Include channel_labels in the stream_info for easy access
                     recorded_sample = {
-                        'timestamp': timestamp,
+                        'timestamp': synchronized_timestamp,  # Synchronized to local time domain (for direct comparison)
+                        'original_timestamp': original_timestamp,  # Original device timestamp (for reference)
                         'relative_time': relative_time,
                         'data': filtered_sample,
                         'stream_index': i,
                         'stream_info': stream_info_copy,  # Includes channel_labels, now fully serializable
                         'session_id': self.session_id,
                         'recorded_at': datetime.now().isoformat(),
-                        'clock_offset': clock_offset,  # NEW: For post-hoc synchronization
-                        'local_time_when_recorded': local_clock(),  # NEW: Reference for offset measurement timing
+                        'clock_offset': clock_offset,  # Clock offset measurement (for post-hoc analysis)
+                        'local_time_when_recorded': local_clock(),  # Reference for offset measurement timing
+                        'synchronization_applied': True,  # Flag indicating timestamps are synchronized
                         'original_channel_count': len(sample),  # Store original count for reference
                         'filtered_channel_indices': channel_filter if channel_filter else None  # Store which channels were selected
                     }
@@ -539,48 +549,56 @@ class LSLRecorder:
                         try:
                             parsed_data = json.loads(data_item)
                             parsed_samples.append({
-                                'timestamp': sample['timestamp'],
-                                'relative_time': sample['relative_time'],
+                                'timestamp': sample.get('timestamp'),  # Synchronized timestamp
+                                'original_timestamp': sample.get('original_timestamp'),  # Original device timestamp
+                                'relative_time': sample.get('relative_time'),
                                 'stream_name': sample['stream_info']['name'],
                                 'stream_type': sample['stream_info']['type'],
                                 'data': parsed_data,
                                 'raw_data': sample['data'],
-                                'clock_offset': sample.get('clock_offset'),  # PRESERVE: Clock offset for sync
-                                'local_time_when_recorded': sample.get('local_time_when_recorded')  # PRESERVE: Timing reference
+                                'clock_offset': sample.get('clock_offset'),  # Clock offset measurement
+                                'local_time_when_recorded': sample.get('local_time_when_recorded'),  # Timing reference
+                                'synchronization_applied': sample.get('synchronization_applied', False)  # Sync flag
                             })
                         except json.JSONDecodeError:
                             # Not JSON, keep as raw
                             parsed_samples.append({
-                                'timestamp': sample['timestamp'],
-                                'relative_time': sample['relative_time'],
+                                'timestamp': sample.get('timestamp'),  # Synchronized timestamp
+                                'original_timestamp': sample.get('original_timestamp'),  # Original device timestamp
+                                'relative_time': sample.get('relative_time'),
                                 'stream_name': sample['stream_info']['name'],
                                 'stream_type': sample['stream_info']['type'],
                                 'data': sample['data'],
                                 'raw_data': sample['data'],
-                                'clock_offset': sample.get('clock_offset'),  # PRESERVE: Clock offset for sync
-                                'local_time_when_recorded': sample.get('local_time_when_recorded')  # PRESERVE: Timing reference
+                                'clock_offset': sample.get('clock_offset'),  # Clock offset measurement
+                                'local_time_when_recorded': sample.get('local_time_when_recorded'),  # Timing reference
+                                'synchronization_applied': sample.get('synchronization_applied', False)  # Sync flag
                             })
                     else:
                         # Numeric data (mouse tracking, etc.)
                         parsed_samples.append({
-                            'timestamp': sample['timestamp'],
-                            'relative_time': sample['relative_time'],
+                            'timestamp': sample.get('timestamp'),  # Synchronized timestamp
+                            'original_timestamp': sample.get('original_timestamp'),  # Original device timestamp
+                            'relative_time': sample.get('relative_time'),
                             'stream_name': sample['stream_info']['name'],
                             'stream_type': sample['stream_info']['type'],
                             'data': sample['data'],
                             'raw_data': sample['data'],
-                            'clock_offset': sample.get('clock_offset'),  # PRESERVE: Clock offset for sync
-                            'local_time_when_recorded': sample.get('local_time_when_recorded')  # PRESERVE: Timing reference
+                            'clock_offset': sample.get('clock_offset'),  # Clock offset measurement
+                            'local_time_when_recorded': sample.get('local_time_when_recorded'),  # Timing reference
+                            'synchronization_applied': sample.get('synchronization_applied', False)  # Sync flag
                         })
                 else:
                     parsed_samples.append({
-                        'timestamp': sample['timestamp'],
-                        'relative_time': sample['relative_time'],
+                        'timestamp': sample.get('timestamp'),  # Synchronized timestamp
+                        'original_timestamp': sample.get('original_timestamp'),  # Original device timestamp
+                        'relative_time': sample.get('relative_time'),
                         'stream_name': sample.get('stream_info', {}).get('name', 'unknown'),
                         'stream_type': sample.get('stream_info', {}).get('type', 'unknown'),
                         'data': sample['data'],
-                        'clock_offset': sample.get('clock_offset'),  # PRESERVE: Clock offset for sync
-                        'local_time_when_recorded': sample.get('local_time_when_recorded')  # PRESERVE: Timing reference
+                        'clock_offset': sample.get('clock_offset'),  # Clock offset measurement
+                        'local_time_when_recorded': sample.get('local_time_when_recorded'),  # Timing reference
+                        'synchronization_applied': sample.get('synchronization_applied', False)  # Sync flag
                     })
             except Exception as e:
                 # Keep original sample if parsing fails
@@ -618,10 +636,14 @@ class LSLRecorder:
             'session_start_time': self.session_start_time,
             'total_samples': len(self.recorded_data),
             'lsl_samples': parsed_samples,
-            'synchronization_info': {  # NEW: Synchronization metadata
-                'sync_method': 'LSL_local_clock',
+            'synchronization_info': {  # Synchronization metadata
+                'sync_method': 'manual_clock_offset_correction',
+                'sync_enabled': True,
+                'description': 'Timestamps are manually synchronized to local time domain by adding clock_offset to original timestamps',
                 'clock_offset_type': 'offset between local and remote device clocks (seconds)',
-                'note': 'Use clock_offset from each sample for post-hoc synchronization with EmotiBit'
+                'timestamp_field': 'timestamp (synchronized to local time domain: original_timestamp + clock_offset)',
+                'original_timestamp_field': 'original_timestamp (device clock domain, for reference)',
+                'note': 'All timestamps in the "timestamp" field are synchronized and can be directly compared across devices. The "original_timestamp" field preserves the device clock time for reference. Clock offset is measured via inlet.time_correction() and applied manually (pyLSL Python bindings do not support postproc_flags).'
             }
         }
         
