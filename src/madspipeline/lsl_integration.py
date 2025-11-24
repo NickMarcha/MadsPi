@@ -214,7 +214,10 @@ class LSLRecorder:
             logger.info(f"Found {len(streams)} LSL stream(s): {[s.name() for s in streams]}")
 
             # Filter streams by name and/or type
+            # IMPORTANT: Internal MadsPipeline streams (bridge events, mouse tracking) are ALWAYS included
+            # These should never be filtered out since they're controlled by the application
             filtered_streams = []
+            internal_stream_names = ['madspipeline_bridgeevents', 'madspipeline_mousetracking']
             
             # If no filters provided, record all streams
             if not stream_name_filters and not stream_type_filters:
@@ -233,6 +236,13 @@ class LSLRecorder:
                     stream_type = s.type() or ''
                     lname = name.lower()
                     ltype = stream_type.lower()
+                    
+                    # Always include internal MadsPipeline streams (bridge events, mouse tracking)
+                    # These are controlled by the application and should never be filtered
+                    if lname in internal_stream_names:
+                        filtered_streams.append(s)
+                        logger.debug(f"Stream '{name}' included (internal MadsPipeline stream)")
+                        continue
                     
                     # Match if name filter matches OR type filter matches (OR logic)
                     # If both filters are provided, stream must match at least one
@@ -258,7 +268,7 @@ class LSLRecorder:
                             filtered_streams.append(s)
                             logger.debug(f"Stream '{name}' matched type filter")
                 
-                logger.info(f"Filtered {len(streams)} streams down to {len(filtered_streams)} streams")
+                logger.info(f"Filtered {len(streams)} streams down to {len(filtered_streams)} streams (internal streams always included)")
 
             if not filtered_streams:
                 logger.warning(f"No LSL streams matched the provided filters. Available streams: {[s.name() for s in streams]}")
@@ -395,11 +405,20 @@ class LSLRecorder:
                 if sample:
                     # Apply channel filtering if configured for this stream
                     stream_name = self.stream_info[i]['name']
+                    stream_type = self.stream_info[i].get('type', '')
                     filtered_sample = sample
                     channel_filter = self.stream_channel_filters.get(stream_name, [])
                     
+                    # Skip channel filtering for marker/string streams (bridge events, etc.)
+                    # These are event-based markers, not numeric data channels
+                    is_marker_stream = (
+                        stream_name.lower() in ['madspipeline_bridgeevents', 'madspipeline_mousetracking'] or
+                        stream_type.lower() in ['markers', 'marker', 'events', 'event']
+                    )
+                    
                     # If channel filter exists and is not empty, filter the sample
-                    if channel_filter:
+                    # But skip filtering for marker streams (they're not numeric channels)
+                    if channel_filter and not is_marker_stream:
                         try:
                             # Filter sample to only include selected channel indices
                             # Only include channels that are within bounds

@@ -2711,6 +2711,8 @@ class SessionReviewWindow(QMainWindow):
                     
                     # Extract recorded samples (structure: lsl_samples array)
                     self.lsl_data = lsl_data.get('lsl_samples', [])
+                    # Store stream_info for channel labels lookup
+                    self.stream_info_list = lsl_data.get('stream_info', [])
                     # Extract session_start_time from metadata for offset calculation
                     lsl_session_start_time = lsl_data.get('session_start_time')
                     
@@ -2952,6 +2954,8 @@ class SessionReviewWindow(QMainWindow):
         
         # Events table
         events_group = QGroupBox("Events Timeline")
+        events_group.setCheckable(True)
+        events_group.setChecked(True)
         events_layout = QVBoxLayout()
         
         self.events_table = QTableWidget()
@@ -2972,6 +2976,8 @@ class SessionReviewWindow(QMainWindow):
         
         # LSL data visualization with filter and pagination
         lsl_group = QGroupBox("LSL Tracking Data")
+        lsl_group.setCheckable(True)
+        lsl_group.setChecked(True)
         lsl_layout = QVBoxLayout()
 
         # Filter and pagination controls
@@ -3023,6 +3029,8 @@ class SessionReviewWindow(QMainWindow):
         
         # Plots area (matplotlib graphs)
         plots_group = QGroupBox("Data Visualization")
+        plots_group.setCheckable(True)
+        plots_group.setChecked(True)
         plots_layout = QVBoxLayout()
         
         # Channel selection controls
@@ -3128,7 +3136,19 @@ class SessionReviewWindow(QMainWindow):
                 self.channel_checkboxes = []
                 
                 for idx, (stream_name, ch_idx) in enumerate(self.plot_channels):
-                    checkbox = QCheckBox(f"{stream_name} Ch{ch_idx}")
+                    # Get channel label from stream_info if available
+                    channel_label = f"{stream_name} Ch{ch_idx}"  # Default fallback
+                    if hasattr(self, 'stream_info_list'):
+                        for stream_info in self.stream_info_list:
+                            if stream_info.get('name') == stream_name:
+                                channel_labels = stream_info.get('channel_labels', {})
+                                if isinstance(channel_labels, dict):
+                                    label_key = str(ch_idx)
+                                    if label_key in channel_labels:
+                                        channel_label = f"{stream_name} - {channel_labels[label_key]}"
+                                        break
+                    
+                    checkbox = QCheckBox(channel_label)
                     # Check first 2 by default
                     checkbox.setChecked(idx < 2)
                     checkbox.stateChanged.connect(lambda: self._redraw_plots())
@@ -3191,9 +3211,21 @@ class SessionReviewWindow(QMainWindow):
                 ax = fig.add_subplot(num_plots, 1, plot_idx + 1)
                 subplots.append(ax)
                 
+                # Get channel label from stream_info if available
+                channel_label = f'{stream_name} Ch{ch_idx}'  # Default fallback
+                if hasattr(self, 'stream_info_list'):
+                    for stream_info in self.stream_info_list:
+                        if stream_info.get('name') == stream_name:
+                            channel_labels = stream_info.get('channel_labels', {})
+                            if isinstance(channel_labels, dict):
+                                label_key = str(ch_idx)
+                                if label_key in channel_labels:
+                                    channel_label = f'{stream_name} - {channel_labels[label_key]}'
+                                    break
+                
                 # Plot data
-                ax.plot(times, values, linewidth=1, alpha=0.7, label=f'{stream_name} Ch{ch_idx}')
-                ax.set_ylabel(f'{stream_name} Ch{ch_idx}')
+                ax.plot(times, values, linewidth=1, alpha=0.7, label=channel_label)
+                ax.set_ylabel(channel_label)
                 ax.legend(loc='upper right', fontsize=8)
                 ax.grid(True, alpha=0.3)
                 
@@ -3415,11 +3447,24 @@ class SessionReviewWindow(QMainWindow):
 
         start = self.lsl_page * page_size
         end = min(start + page_size, total_filtered)
-        rows = end - start
+        
+        # First pass: expand multi-channel samples into multiple rows
+        display_rows = []
+        for idx in range(start, end):
+            sample_idx = self.lsl_filtered_indices[idx]
+            sample = self.lsl_data[sample_idx]
+            data = sample.get('data', [])
+            # For multi-channel numeric data, create one row per channel
+            if isinstance(data, list) and len(data) > 1 and sample.get('stream_name') != 'MadsPipeline_MouseTracking':
+                for ch_idx in range(len(data)):
+                    display_rows.append((sample_idx, ch_idx))
+            else:
+                display_rows.append((sample_idx, 0))
+        
+        rows = len(display_rows)
         self.lsl_table.setRowCount(rows)
 
-        for row_idx in range(rows):
-            sample_idx = self.lsl_filtered_indices[start + row_idx]
+        for row_idx, (sample_idx, ch_idx) in enumerate(display_rows):
             sample = self.lsl_data[sample_idx]
 
             # Time
@@ -3471,14 +3516,46 @@ class SessionReviewWindow(QMainWindow):
                     val_item.setData(Qt.ItemDataRole.UserRole, raw)
                     self.lsl_table.setItem(row_idx, 3, val_item)
             elif isinstance(data, list) and len(data) > 0:
-                self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Ch 0"))
-                val_item = QTableWidgetItem(str(data[0])[:200])
-                try:
-                    raw = sample.get('raw_data')[0] if sample.get('raw_data') else json.dumps(data, ensure_ascii=False)
-                except Exception:
-                    raw = str(data[0])
-                val_item.setData(Qt.ItemDataRole.UserRole, raw)
-                self.lsl_table.setItem(row_idx, 3, val_item)
+                # Get filtered channel indices if available (to map back to original channel numbers)
+                filtered_indices = sample.get('filtered_channel_indices')
+                stream_info_sample = sample.get('stream_info', {})
+                channel_labels = stream_info_sample.get('channel_labels', {})
+                
+                # Get original channel index if filtered (ch_idx is the index in the filtered data array)
+                original_ch_idx = ch_idx
+                if filtered_indices and isinstance(filtered_indices, list) and ch_idx < len(filtered_indices):
+                    original_ch_idx = filtered_indices[ch_idx]
+                elif not filtered_indices:
+                    # No filtering was applied, so ch_idx is the original index
+                    original_ch_idx = ch_idx
+                
+                # Get channel label
+                channel_label = f"Ch {original_ch_idx}"
+                if isinstance(channel_labels, dict):
+                    label_key = str(original_ch_idx)
+                    if label_key in channel_labels:
+                        channel_label = channel_labels[label_key]
+                
+                # Display the specific channel value
+                if ch_idx < len(data):
+                    self.lsl_table.setItem(row_idx, 2, QTableWidgetItem(channel_label))
+                    val_item = QTableWidgetItem(str(data[ch_idx])[:200])
+                    try:
+                        raw_data = sample.get('raw_data', [])
+                        if isinstance(raw_data, list) and ch_idx < len(raw_data):
+                            raw = raw_data[ch_idx]
+                        else:
+                            raw = json.dumps(data[ch_idx], ensure_ascii=False)
+                    except Exception:
+                        raw = str(data[ch_idx])
+                    val_item.setData(Qt.ItemDataRole.UserRole, raw)
+                    self.lsl_table.setItem(row_idx, 3, val_item)
+                else:
+                    # Fallback if ch_idx is out of bounds
+                    self.lsl_table.setItem(row_idx, 2, QTableWidgetItem(channel_label))
+                    val_item = QTableWidgetItem("N/A")
+                    val_item.setData(Qt.ItemDataRole.UserRole, "")
+                    self.lsl_table.setItem(row_idx, 3, val_item)
             elif isinstance(data, dict):
                 self.lsl_table.setItem(row_idx, 2, QTableWidgetItem("Event"))
                 val_item = QTableWidgetItem(str(data)[:200])
