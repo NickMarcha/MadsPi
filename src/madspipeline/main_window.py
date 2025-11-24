@@ -1679,27 +1679,120 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                     # Start BrainFlow streamer if configured (before recording starts)
                     self.brainflow_streamer = None
                     if lsl_config and getattr(lsl_config, 'use_brainflow', False):
+                        # Check if EmotiBit is required (enabled in config)
+                        # If enable_emotibit is True, the device is required for the session
+                        emotibit_required = getattr(lsl_config, 'enable_emotibit', False)
+                        
+                        # First, check if EmotiBit LSL stream already exists (e.g., from LSL Manager)
+                        # This avoids creating a duplicate BrainFlow board instance
+                        import time
+                        from pylsl import resolve_streams
+                        stream_already_exists = False
+                        stream_name_to_check = "EmotiBit_BrainFlow"  # Default stream name
+                        
                         try:
-                            from .emotibit_brainflow import EmotiBitBrainflowStreamer
-                            ip = getattr(lsl_config, 'brainflow_ip', None)
-                            self.brainflow_streamer = EmotiBitBrainflowStreamer(ip_address=ip)
-                            self.brainflow_streamer.start()
-                            logger.info("[LSL] Started BrainFlow EmotiBit streamer")
-                            # Wait for BrainFlow streamer to create LSL outlet (can take 5-10 seconds)
-                            import time
-                            max_wait = 10.0  # Maximum wait time in seconds
-                            wait_interval = 0.5  # Check every 0.5 seconds
-                            waited = 0.0
-                            while waited < max_wait:
-                                if hasattr(self.brainflow_streamer, '_outlet') and self.brainflow_streamer._outlet is not None:
-                                    logger.info(f"[LSL] BrainFlow LSL outlet created after {waited:.1f}s")
+                            logger.info("[LSL] Checking if EmotiBit LSL stream already exists...")
+                            streams = resolve_streams(wait_time=1.0)
+                            for stream in streams:
+                                if stream.name() == stream_name_to_check or "EmotiBit" in stream.name():
+                                    logger.info(f"[LSL] Found existing EmotiBit LSL stream: {stream.name()}")
+                                    stream_already_exists = True
                                     break
-                                time.sleep(wait_interval)
-                                waited += wait_interval
-                            else:
-                                logger.warning(f"[LSL] BrainFlow streamer started but LSL outlet not created after {max_wait}s - proceeding anyway")
                         except Exception as e:
-                            logger.warning(f"[LSL] Could not start BrainFlow streamer: {e}")
+                            logger.debug(f"[LSL] Error checking for existing streams: {e}")
+                        
+                        if not stream_already_exists:
+                            # No existing stream, create a new BrainFlow streamer
+                            try:
+                                from .emotibit_brainflow import EmotiBitBrainflowStreamer
+                                ip = getattr(lsl_config, 'brainflow_ip', None)
+                                self.brainflow_streamer = EmotiBitBrainflowStreamer(ip_address=ip)
+                                self.brainflow_streamer.start()
+                                logger.info("[LSL] Started BrainFlow EmotiBit streamer")
+                                
+                                # Wait for BrainFlow streamer to create LSL outlet (can take 5-10 seconds)
+                                max_wait = 10.0  # Maximum wait time in seconds
+                                wait_interval = 0.5  # Check every 0.5 seconds
+                                waited = 0.0
+                                outlet_created = False
+                                
+                                while waited < max_wait:
+                                    # Check if outlet was created
+                                    if hasattr(self.brainflow_streamer, '_outlet') and self.brainflow_streamer._outlet is not None:
+                                        logger.info(f"[LSL] BrainFlow LSL outlet created after {waited:.1f}s")
+                                        outlet_created = True
+                                        break
+                                    
+                                    # Check if there was a connection error
+                                    if hasattr(self.brainflow_streamer, '_connection_error') and self.brainflow_streamer._connection_error:
+                                        error_msg = self.brainflow_streamer._connection_error
+                                        logger.error(f"[LSL] BrainFlow connection failed: {error_msg}")
+                                        if emotibit_required:
+                                            # Stop the streamer and raise an error
+                                            try:
+                                                self.brainflow_streamer.stop()
+                                            except:
+                                                pass
+                                            raise RuntimeError(
+                                                f"EmotiBit device is required but could not be connected.\n\n"
+                                                f"Error: {error_msg}\n\n"
+                                                f"Please ensure:\n"
+                                                f"1. EmotiBit device is powered on and connected to the network\n"
+                                                f"2. Device is on the same network as this computer\n"
+                                                f"3. No other program is using the EmotiBit device (e.g., EmotiBit Oscilloscope)\n"
+                                                f"4. If using auto-discovery, wait a few seconds and try again\n"
+                                                f"5. Try specifying the IP address in the LSL Manager settings"
+                                            )
+                                        else:
+                                            # Not required, just log a warning
+                                            logger.warning(f"[LSL] BrainFlow connection failed but EmotiBit is not required: {error_msg}")
+                                            break
+                                    
+                                    time.sleep(wait_interval)
+                                    waited += wait_interval
+                                
+                                # If EmotiBit is required but outlet wasn't created, fail
+                                if emotibit_required and not outlet_created:
+                                    error_msg = "EmotiBit device is required but LSL stream was not created after 10 seconds"
+                                    logger.error(f"[LSL] {error_msg}")
+                                    try:
+                                        self.brainflow_streamer.stop()
+                                    except:
+                                        pass
+                                    raise RuntimeError(
+                                        f"{error_msg}\n\n"
+                                        f"Please ensure:\n"
+                                        f"1. EmotiBit device is powered on and connected to the network\n"
+                                        f"2. Device is on the same network as this computer\n"
+                                        f"3. No other program is using the EmotiBit device (e.g., EmotiBit Oscilloscope)\n"
+                                        f"4. If using auto-discovery, wait a few seconds and try again\n"
+                                        f"5. Try specifying the IP address in the LSL Manager settings"
+                                    )
+                                elif not outlet_created:
+                                    logger.warning(f"[LSL] BrainFlow streamer started but LSL outlet not created after {max_wait}s - proceeding anyway (EmotiBit not required)")
+                                    
+                            except RuntimeError:
+                                # Re-raise RuntimeError (our connection failure)
+                                raise
+                            except Exception as e:
+                                if emotibit_required:
+                                    # EmotiBit is required, so this is a fatal error
+                                    logger.error(f"[LSL] Failed to start required BrainFlow streamer: {e}", exc_info=True)
+                                    raise RuntimeError(
+                                        f"Failed to start EmotiBit streamer (required): {e}\n\n"
+                                        f"Please ensure:\n"
+                                        f"1. EmotiBit device is powered on and connected to the network\n"
+                                        f"2. Device is on the same network as this computer\n"
+                                        f"3. No other program is using the EmotiBit device\n"
+                                        f"4. Try specifying the IP address in the LSL Manager settings"
+                                    )
+                                else:
+                                    # Not required, just log a warning
+                                    logger.warning(f"[LSL] Could not start BrainFlow streamer (not required): {e}")
+                        else:
+                            logger.info("[LSL] EmotiBit LSL stream already exists (likely from LSL Manager), reusing it")
+                            # Stream already exists, no need to create a new streamer or wait
+                            # The stream will be picked up by LSLRecorder when it resolves streams
                     
                     # Create LSL recorder. If project LSL config includes filters,
                     # pass them so only selected streams and channels are recorded.
@@ -2151,14 +2244,23 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                     logger.warning(f"LSL recorder has no recorded data, but saved empty file to {lsl_file}")
             except Exception as e:
                 logger.error(f"Error saving LSL data: {e}", exc_info=True)
-                import traceback
-                traceback.print_exc()
+                # Use logger.exception instead of traceback.print_exc() to avoid WinError on Windows
                 # Try to save at least the structure even if there's an error
                 try:
                     # Create minimal LSL file structure
+                    # Ensure stream_info is serializable
+                    stream_info_serializable = []
+                    if hasattr(self.lsl_recorder, 'stream_info') and self.lsl_recorder.stream_info:
+                        for si in self.lsl_recorder.stream_info:
+                            si_copy = si.copy() if isinstance(si, dict) else {}
+                            # Remove any StreamInfo objects
+                            if 'inlet_info' in si_copy and hasattr(si_copy.get('inlet_info'), 'name'):
+                                si_copy['inlet_info'] = None
+                            stream_info_serializable.append(si_copy)
+                    
                     minimal_lsl_data = {
                         'session_id': self.session.session_id,
-                        'stream_info': self.lsl_recorder.stream_info if hasattr(self.lsl_recorder, 'stream_info') else [],
+                        'stream_info': stream_info_serializable,
                         'session_start_time': self.lsl_recorder.session_start_time if hasattr(self.lsl_recorder, 'session_start_time') else None,
                         'total_samples': 0,
                         'lsl_samples': [],
@@ -2576,10 +2678,12 @@ class SessionReviewWindow(QMainWindow):
                     lsl_data = safe_read_json(lsl_file)
                     if lsl_data is None:
                         raise ValueError(f"Could not read LSL file: {lsl_file}")
-                        # Extract recorded samples (structure: lsl_samples array)
-                        self.lsl_data = lsl_data.get('lsl_samples', [])
-                        # Extract session_start_time from metadata for offset calculation
-                        lsl_session_start_time = lsl_data.get('session_start_time')
+                    
+                    # Extract recorded samples (structure: lsl_samples array)
+                    self.lsl_data = lsl_data.get('lsl_samples', [])
+                    # Extract session_start_time from metadata for offset calculation
+                    lsl_session_start_time = lsl_data.get('session_start_time')
+                    
                     logger.info(f"[SessionReview] Loaded {len(self.lsl_data)} LSL samples")
                     if lsl_session_start_time:
                         logger.debug(f"[SessionReview] LSL session_start_time: {lsl_session_start_time:.6f}s")
@@ -3995,7 +4099,18 @@ class MainWindow(QMainWindow):
                     
                 except Exception as e:
                     logger.error(f"Failed to create session: {e}", exc_info=True)
-                    QMessageBox.critical(self, "Error", f"Failed to create session: {e}")
+                    error_msg = str(e)
+                    # Provide more helpful error messages for common issues
+                    if "EmotiBit" in error_msg or "BrainFlow" in error_msg:
+                        QMessageBox.critical(
+                            self, 
+                            "EmotiBit Connection Failed", 
+                            f"Failed to start session:\n\n{error_msg}\n\n"
+                            "The session cannot start without the required EmotiBit device.\n"
+                            "Please check the device connection and try again."
+                        )
+                    else:
+                        QMessageBox.critical(self, "Error", f"Failed to create session: {e}")
         else:
             # TODO: Implement other project type sessions
             QMessageBox.information(self, "Info", f"Session functionality for {self.current_project.project_type.value} projects coming soon!")

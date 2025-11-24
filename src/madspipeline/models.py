@@ -294,15 +294,14 @@ class Session:
     """Represents a recording session.
     
     Note: All session data (including recordings and LSL data) is stored in
-    sessions/{session_id}/. The tracking_data_path field has been removed
-    as it's redundant - the path is always sessions/{session_id}/.
+    sessions/{session_id}/. The recording_path field has been removed as recordings
+    are always stored in sessions/{session_id}/.
     """
     session_id: str
     name: str
     created_date: datetime
     modified_date: datetime = field(default_factory=datetime.now)
     duration: Optional[float] = None  # Duration in seconds
-    recording_path: Optional[Path] = None  # Legacy field, kept for backward compatibility
     markers: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -313,21 +312,19 @@ class Session:
             'created_date': self.created_date.isoformat(),
             'modified_date': self.modified_date.isoformat(),
             'duration': self.duration,
-            'recording_path': str(self.recording_path) if self.recording_path else None,
             'markers': self.markers
         }
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Session':
         """Create session from dictionary."""
-        # Handle backward compatibility: ignore tracking_data_path if present
+        # Handle backward compatibility: ignore recording_path if present (legacy field)
         return cls(
             session_id=data['session_id'],
             name=data['name'],
             created_date=datetime.fromisoformat(data['created_date']),
             modified_date=datetime.fromisoformat(data.get('modified_date', data['created_date'])),
             duration=data.get('duration'),
-            recording_path=Path(data['recording_path']) if data.get('recording_path') else None,
             markers=data.get('markers', [])
         )
 

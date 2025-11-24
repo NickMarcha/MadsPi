@@ -26,11 +26,15 @@ def main():
         logger.setLevel(logging.INFO)
         formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+        # File handler: log everything (INFO and above) to file
         fh = logging.FileHandler(log_file, encoding='utf-8')
+        fh.setLevel(logging.INFO)
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 
+        # Console handler: only show WARNING and above to reduce terminal verbosity
         ch = logging.StreamHandler(sys.__stdout__)
+        ch.setLevel(logging.WARNING)  # Only warnings and errors in terminal
         ch.setFormatter(formatter)
         logger.addHandler(ch)
 
@@ -70,10 +74,18 @@ def main():
                             except Exception:
                                 pass
                             # Also log decoded text via logging to keep consistency
+                            # Filter out verbose messages from native libraries (BrainFlow, OpenCV, LSL)
+                            # These go to file but not console to reduce terminal noise
                             try:
                                 text = chunk.decode('utf-8', errors='replace')
                                 for line in text.rstrip().splitlines():
-                                    logger_instance.info(line)
+                                    # Skip verbose INFO messages from native libraries
+                                    # Only log WARNING/ERROR level messages to console
+                                    line_lower = line.lower()
+                                    if any(keyword in line_lower for keyword in ['error', 'warning', 'warn', 'failed', 'critical']):
+                                        logger_instance.warning(line)  # Use warning level so it appears in console
+                                    else:
+                                        logger_instance.debug(line)  # Use debug level so it only goes to file
                             except Exception:
                                 pass
                 except Exception:

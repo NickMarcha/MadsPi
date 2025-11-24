@@ -327,13 +327,39 @@ class LSLRecorder:
                 
                 # Store stream info with full metadata
                 logger.debug(f"Storing stream info for {stream_name}")
+                # Convert StreamInfo to dictionary for JSON serialization
+                inlet_info_dict = None
+                if inlet_info:
+                    try:
+                        inlet_info_dict = {
+                            'name': inlet_info.name(),
+                            'type': inlet_info.type(),
+                            'channel_count': inlet_info.channel_count(),
+                            'nominal_srate': inlet_info.nominal_srate(),
+                            'channel_format': inlet_info.channel_format(),
+                            'source_id': inlet_info.source_id(),
+                            'version': inlet_info.version(),
+                            'created_at': inlet_info.created_at(),
+                            'uid': inlet_info.uid(),
+                            'session_id': inlet_info.session_id() if hasattr(inlet_info, 'session_id') else None,
+                            'hostname': inlet_info.hostname() if hasattr(inlet_info, 'hostname') else None
+                        }
+                    except Exception as e:
+                        logger.warning(f"Could not fully serialize StreamInfo for {stream_name}: {e}")
+                        # Fallback to basic info
+                        inlet_info_dict = {
+                            'name': stream_name,
+                            'type': stream.type(),
+                            'channel_count': stream.channel_count()
+                        }
+                
                 info = {
                     'name': stream_name,
                     'type': stream.type(),
                     'channel_count': stream.channel_count(),
                     'source_id': stream.source_id(),
                     'session_id': self.session_id,
-                    'inlet_info': inlet_info,  # Store full StreamInfo object for metadata access
+                    'inlet_info': inlet_info_dict,  # Store as dict for JSON serialization
                     'channel_labels': channel_labels  # Also store as dict for easy access
                 }
                 self.stream_info.append(info)
@@ -403,13 +429,34 @@ class LSLRecorder:
                     
                     # Record the sample (with filtered channels if applicable)
                     stream_info_copy = self.stream_info[i].copy()
+                    # Ensure inlet_info is a dict, not a StreamInfo object
+                    if 'inlet_info' in stream_info_copy and stream_info_copy['inlet_info'] is not None:
+                        if hasattr(stream_info_copy['inlet_info'], 'name'):
+                            # It's still a StreamInfo object, convert it
+                            try:
+                                si = stream_info_copy['inlet_info']
+                                stream_info_copy['inlet_info'] = {
+                                    'name': si.name(),
+                                    'type': si.type(),
+                                    'channel_count': si.channel_count(),
+                                    'nominal_srate': si.nominal_srate(),
+                                    'channel_format': si.channel_format(),
+                                    'source_id': si.source_id(),
+                                    'version': si.version(),
+                                    'created_at': si.created_at(),
+                                    'uid': si.uid()
+                                }
+                            except Exception as e:
+                                logger.debug(f"Error converting StreamInfo in sample: {e}")
+                                stream_info_copy['inlet_info'] = None
+                    
                     # Include channel_labels in the stream_info for easy access
                     recorded_sample = {
                         'timestamp': timestamp,
                         'relative_time': relative_time,
                         'data': filtered_sample,
                         'stream_index': i,
-                        'stream_info': stream_info_copy,  # Includes channel_labels
+                        'stream_info': stream_info_copy,  # Includes channel_labels, now fully serializable
                         'session_id': self.session_id,
                         'recorded_at': datetime.now().isoformat(),
                         'clock_offset': clock_offset,  # NEW: For post-hoc synchronization
@@ -520,9 +567,35 @@ class LSLRecorder:
                 # Keep original sample if parsing fails
                 parsed_samples.append(sample)
         
+        # Ensure stream_info is fully serializable (remove any remaining StreamInfo objects)
+        serializable_stream_info = []
+        for stream_info_item in self.stream_info:
+            stream_info_copy = stream_info_item.copy()
+            # Remove inlet_info if it's still a StreamInfo object (shouldn't happen, but safety check)
+            if 'inlet_info' in stream_info_copy:
+                if hasattr(stream_info_copy['inlet_info'], 'name'):
+                    # It's still a StreamInfo object, convert it
+                    try:
+                        si = stream_info_copy['inlet_info']
+                        stream_info_copy['inlet_info'] = {
+                            'name': si.name(),
+                            'type': si.type(),
+                            'channel_count': si.channel_count(),
+                            'nominal_srate': si.nominal_srate(),
+                            'channel_format': si.channel_format(),
+                            'source_id': si.source_id(),
+                            'version': si.version(),
+                            'created_at': si.created_at(),
+                            'uid': si.uid()
+                        }
+                    except Exception as e:
+                        logger.warning(f"Error converting StreamInfo to dict: {e}")
+                        stream_info_copy['inlet_info'] = None
+            serializable_stream_info.append(stream_info_copy)
+        
         output_data = {
             'session_id': self.session_id,
-            'stream_info': self.stream_info,
+            'stream_info': serializable_stream_info,
             'session_start_time': self.session_start_time,
             'total_samples': len(self.recorded_data),
             'lsl_samples': parsed_samples,

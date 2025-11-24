@@ -48,6 +48,7 @@ class EmotiBitBrainflowStreamer:
         self._board = None
         self._outlet: Optional[StreamOutlet] = None
         self._started = False
+        self._connection_error: Optional[str] = None  # Store connection error message
 
     def start(self):
         if self._started:
@@ -271,6 +272,8 @@ class EmotiBitBrainflowStreamer:
 
         except Exception as e:
             error_msg = str(e)
+            # Store error message for checking by session window
+            self._connection_error = error_msg
             logger.error(f"BrainFlow error: {error_msg}", exc_info=True)
             
             # Provide helpful error messages for common issues
