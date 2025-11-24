@@ -62,10 +62,10 @@ class EmotiBitBrainflowStreamer:
 
     def stop(self, timeout: float = 5.0):
         if not self._started:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.info("Stopping BrainFlow EmotiBit streamer")
             return
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Stopping BrainFlow EmotiBit streamer")
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout)
@@ -79,31 +79,38 @@ class EmotiBitBrainflowStreamer:
         self._started = False
 
     def _run(self):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         params = BrainFlowInputParams()
         if self.ip_address:
             params.ip_address = self.ip_address
+            logger.info(f"Using specified IP address: {self.ip_address}")
+        else:
+            logger.info("No IP address specified, using auto-discovery (this may take longer)")
 
         board_id = BoardIds.EMOTIBIT_BOARD.value
         board = BoardShim(board_id, params)
         self._board = board
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info("BrainFlow thread started")
+        logger.info("BrainFlow thread started")
 
         try:
+            logger.info("Attempting to prepare BrainFlow board session...")
             board.prepare_session()
-                logger.info("BrainFlow board session prepared")
+            logger.info("BrainFlow board session prepared successfully")
+            
+            logger.info("Starting BrainFlow stream...")
             board.start_stream()
-    logger.info("BrainFlow stream started")
+            logger.info("BrainFlow stream started successfully")
 
             # quick warmup read
             time.sleep(0.2)
             data = board.get_board_data()
-    logger.debug(f"BrainFlow got initial data: {data.shape if hasattr(data, 'shape') else 'None'}")
+            logger.debug(f"BrainFlow got initial data: {data.shape if hasattr(data, 'shape') else 'None'}")
 
             # If no data yet, wait a bit
             if data is None or getattr(data, 'size', 0) == 0:
-                            logger.debug(f"BrainFlow after warmup: {data.shape if hasattr(data, 'shape') else 'None'}")
+                logger.debug(f"BrainFlow after warmup: {data.shape if hasattr(data, 'shape') else 'None'}")
                 time.sleep(0.2)
                 data = board.get_board_data()
 
@@ -112,12 +119,12 @@ class EmotiBitBrainflowStreamer:
                 n_channels = int(data.shape[0]) if data is not None and getattr(data, 'shape', None) else 16
             except Exception:
                 n_channels = 16
-    logger.info(f"Creating LSL stream with {n_channels} channels")
+            logger.info(f"Creating LSL stream with {n_channels} channels")
 
             info = StreamInfo('EmotiBit_BrainFlow', 'EmotiBit', n_channels, self.nominal_srate, 'float32', 'emotibit_brainflow_0')
             outlet = StreamOutlet(info)
             self._outlet = outlet
-    logger.info("LSL outlet created successfully")
+            logger.info("LSL outlet created successfully")
 
             # Main loop: read and push samples
             while not self._stop_event.is_set():
@@ -140,11 +147,30 @@ class EmotiBitBrainflowStreamer:
                 time.sleep(0.001)
 
         except Exception as e:
-            logger.error(f"BrainFlow error: {e}", exc_info=True)
+            error_msg = str(e)
+            logger.error(f"BrainFlow error: {error_msg}", exc_info=True)
+            
+            # Provide helpful error messages for common issues
+            if "BOARD_NOT_READY_ERROR" in error_msg or "unable to prepare streaming session" in error_msg:
+                logger.error(
+                    "EmotiBit device not found or not ready. "
+                    "Please ensure:\n"
+                    "  1. EmotiBit device is powered on and connected to the network\n"
+                    "  2. Device is on the same network as this computer\n"
+                    "  3. If using auto-discovery, wait a few seconds and try again\n"
+                    "  4. Try specifying the IP address in the LSL Manager settings"
+                )
+            elif "timeout" in error_msg.lower():
+                logger.error(
+                    "Connection timeout. The EmotiBit device may not be reachable. "
+                    "Try specifying the IP address directly."
+                )
+            
             # ensure resources are released on error
             try:
-                board.stop_stream()
-                board.release_session()
+                if board:
+                    board.stop_stream()
+                    board.release_session()
             except Exception as e2:
                 logger.error(f"Error cleaning up board: {e2}")
                 pass

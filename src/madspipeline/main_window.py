@@ -1362,6 +1362,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self.lsl_recorder: Optional[LSLRecorder] = None
         self.lsl_timer: Optional[QTimer] = None
         
+        # BrainFlow streamer (for EmotiBit)
+        self.brainflow_streamer = None
+        
         # Screen recording component
         self.screen_recorder: Optional[ScreenRecorder] = None
         
@@ -1644,13 +1647,36 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                         self.lsl_mouse_streamer = None
                         print("[LSL] Mouse tracking stream disabled")
                     
-                    # Create LSL recorder. If project LSL config includes additional_stream_filters,
+                    # Start BrainFlow streamer if configured (before recording starts)
+                    self.brainflow_streamer = None
+                    if lsl_config and getattr(lsl_config, 'use_brainflow', False):
+                        try:
+                            from .emotibit_brainflow import EmotiBitBrainflowStreamer
+                            ip = getattr(lsl_config, 'brainflow_ip', None)
+                            self.brainflow_streamer = EmotiBitBrainflowStreamer(ip_address=ip)
+                            self.brainflow_streamer.start()
+                            print("[LSL] Started BrainFlow EmotiBit streamer")
+                            # Give streamer time to start before resolving streams
+                            import time
+                            time.sleep(1.0)
+                        except Exception as e:
+                            print(f"[LSL] Warning: Could not start BrainFlow streamer: {e}")
+                    
+                    # Create LSL recorder. If project LSL config includes filters,
                     # pass them so only selected streams are recorded.
                     self.lsl_recorder = LSLRecorder(self.session.session_id)
-                    filters = None
-                    if lsl_config and getattr(lsl_config, 'additional_stream_filters', None):
-                        filters = lsl_config.additional_stream_filters
-                    self.lsl_recorder.start_recording(wait_time=2.0, stream_name_filters=filters)
+                    name_filters = None
+                    type_filters = None
+                    if lsl_config:
+                        if getattr(lsl_config, 'additional_stream_filters', None):
+                            name_filters = lsl_config.additional_stream_filters
+                        if getattr(lsl_config, 'additional_stream_type_filters', None):
+                            type_filters = lsl_config.additional_stream_type_filters
+                    self.lsl_recorder.start_recording(
+                        wait_time=2.0, 
+                        stream_name_filters=name_filters,
+                        stream_type_filters=type_filters
+                    )
                     
                     # Push session_start event to LSL
                     session_start_event = {
@@ -1980,6 +2006,15 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 self.lsl_recorder.stop_recording()
             except Exception as e:
                 print(f"Error stopping LSL recorder: {e}")
+        
+        # Stop BrainFlow streamer if running
+        if self.brainflow_streamer:
+            try:
+                self.brainflow_streamer.stop()
+                print("[LSL] Stopped BrainFlow EmotiBit streamer")
+            except Exception as e:
+                print(f"[LSL] Warning: Error stopping BrainFlow streamer: {e}")
+            self.brainflow_streamer = None
         
         # Close LSL streamers
         if self.lsl_streamer:

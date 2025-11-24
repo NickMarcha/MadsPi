@@ -64,7 +64,9 @@ class LSLConfig:
     use_brainflow: bool = False
     brainflow_ip: Optional[str] = None
     brainflow_auto_start: bool = False
-    additional_stream_filters: List[str] = field(default_factory=list)  # Additional stream name filters to record
+    # Stream filtering: names and types to record
+    additional_stream_filters: List[str] = field(default_factory=list)  # Stream name filters to record
+    additional_stream_type_filters: List[str] = field(default_factory=list)  # Stream type filters to record (e.g., ['EmotiBit', 'EEG'])
 
 
 @dataclass
@@ -141,7 +143,8 @@ class Project:
                     'use_brainflow': getattr(self.embedded_webpage_config.lsl_config, 'use_brainflow', False),
                     'brainflow_ip': getattr(self.embedded_webpage_config.lsl_config, 'brainflow_ip', None),
                     'brainflow_auto_start': getattr(self.embedded_webpage_config.lsl_config, 'brainflow_auto_start', False),
-                    'additional_stream_filters': self.embedded_webpage_config.lsl_config.additional_stream_filters
+                    'additional_stream_filters': self.embedded_webpage_config.lsl_config.additional_stream_filters,
+                    'additional_stream_type_filters': getattr(self.embedded_webpage_config.lsl_config, 'additional_stream_type_filters', [])
                 }
             config_data['embedded_webpage'] = {
                 'webpage_url': self.embedded_webpage_config.webpage_url,
@@ -225,7 +228,8 @@ class Project:
                     use_brainflow=lsl_cfg.get('use_brainflow', False),
                     brainflow_ip=lsl_cfg.get('brainflow_ip'),
                     brainflow_auto_start=lsl_cfg.get('brainflow_auto_start', False),
-                    additional_stream_filters=lsl_cfg.get('additional_stream_filters', [])
+                    additional_stream_filters=lsl_cfg.get('additional_stream_filters', []),
+                    additional_stream_type_filters=lsl_cfg.get('additional_stream_type_filters', [])
                 )
             else:
                 # Create default LSL config from legacy enable_marker_api flag

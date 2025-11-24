@@ -12,10 +12,75 @@
 
 ### Documentation Policy (AI Agents)
 
+- **CRITICAL: There is only ONE README file** (`README.md` at the root). Do not create additional README files in subdirectories or elsewhere.
 - **Do not create new standalone Markdown files** in the repository unless explicitly requested by a human maintainer. Prefer adding or updating sections in `README.md` or `.github/copilot-instructions.md` to avoid documentation sprawl.
-- If substantial new documentation is required and a new file is approved, place it under a dedicated docs/ folder and confirm with the repo owner before committing.
+- If substantial new documentation is required and a new file is approved, place it under a dedicated `docs/` folder and confirm with the repo owner before committing.
 - When modifying documentation, summarize the changes in the commit message and update `README.md` when material affects project usage or developer workflows.
+- **External documentation** is stored in `external_docs/` (see Project Structure below) - these are reference materials for third-party libraries/devices, not project documentation.
 
+
+---
+
+## Project Structure
+
+```
+MadsPi/
+├── src/madspipeline/          # Main source code
+│   ├── main.py                # Entry point
+│   ├── main_window.py         # Qt6 GUI (3700+ lines)
+│   ├── models.py              # Data models & enums
+│   ├── project_manager.py     # Project persistence
+│   ├── lsl_integration.py     # LSL streaming & recording
+│   ├── screen_recorder.py     # Video capture with sync
+│   ├── madsBridge.py          # HTML ↔ Python bridge
+│   ├── lsl_manager.py         # LSL stream management UI
+│   └── emotibit_brainflow.py  # EmotiBit integration
+├── tests/                     # Test suite
+│   ├── unit/                  # Unit tests (models, data)
+│   ├── integration/           # Integration tests (GUI, LSL, bridge)
+│   └── fixtures/              # Test fixtures (HTML, etc.)
+├── docs/                      # Project documentation
+│   ├── code/                  # Code examples (HTML bridge examples)
+│   ├── images/                # Project images/assets
+│   ├── videos/                # Demo videos
+│   └── MadsBridge.MD          # Bridge documentation
+├── external_docs/             # Third-party reference documentation
+│   ├── brainflow/             # BrainFlow library docs/examples
+│   ├── EmotiBit/              # EmotiBit device documentation
+│   │   ├── Getting_Started.md
+│   │   ├── Keep_emotibit_up_to_date.md
+│   │   ├── Learn_more_about_emotibit.md
+│   │   ├── README.md          # Note: This is EmotiBit's README, not ours
+│   │   ├── Troubleshooting.md
+│   │   └── Working_with_emotibit_data.md
+│   ├── pyLSL/                 # pyLSL library documentation
+│   │   ├── examples/           # LSL example scripts
+│   │   └── README.rst          # pyLSL reference
+│   └── TobiiSDK/              # Tobii SDK documentation
+│       ├── python-getting-started
+│       ├── step-by-step
+│       └── tobiilsl/          # Tobii LSL integration
+├── scripts/                   # Setup scripts (Windows/Linux/macOS)
+├── logs/                      # Application logs (gitignored)
+├── debug data/                # Test/debug session data (gitignored)
+├── .github/
+│   └── copilot-instructions.md  # This file - AI agent guidelines
+├── README.md                  # THE ONLY README - main project documentation
+├── pyproject.toml             # Project configuration
+├── pytest.ini                 # Test configuration
+├── requirements.txt           # Runtime dependencies
+├── requirements-dev.txt       # Development dependencies
+└── run.py                     # Application launcher script
+```
+
+### Important Notes on Structure
+
+- **`external_docs/`**: Contains reference documentation for third-party libraries and devices (EmotiBit, pyLSL, Tobii SDK, BrainFlow). These are NOT project documentation - they are included for developer reference when working with these tools. Do not modify these files unless updating to newer versions of the external documentation.
+- **`docs/`**: Contains project-specific documentation (bridge examples, images, videos). This is separate from `external_docs/` which contains third-party materials.
+- **`README.md`**: The single source of truth for project documentation. All user-facing and developer documentation should be in this file.
+- **`logs/` and `debug data/`**: Runtime-generated directories (gitignored). Do not commit these.
+- **`src/madspipeline/`**: All application source code. Follow Python package structure.
+- **`tests/`**: Test suite organized by type (unit vs integration).
 
 ---
 

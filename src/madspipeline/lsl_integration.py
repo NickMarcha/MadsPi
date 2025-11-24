@@ -3,15 +3,18 @@ LSL (Lab Streaming Layer) integration for MadsPipeline.
 Handles streaming bridge events to LSL and recording LSL streams during sessions.
 """
 import json
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 try:
     from pylsl import StreamInfo, StreamOutlet, StreamInlet, resolve_streams, local_clock
     LSL_AVAILABLE = True
 except ImportError:
     LSL_AVAILABLE = False
-    print("Warning: pylsl not available. LSL integration will be disabled.")
+    logger.warning("pylsl not available. LSL integration will be disabled.")
 
 
 class LSLBridgeStreamer:
@@ -65,7 +68,7 @@ class LSLBridgeStreamer:
             # Push to LSL stream with current LSL timestamp
             self.outlet.push_sample([event_str], local_clock())
         except Exception as e:
-            print(f"Error pushing event to LSL: {e}")
+            logger.error(f"Error pushing event to LSL: {e}")
     
     def close(self):
         """Close the LSL stream outlet."""
@@ -147,7 +150,7 @@ class LSLMouseTrackingStreamer:
             # Push to LSL stream with current LSL timestamp
             self.outlet.push_sample([x, y, event_type], local_clock())
         except Exception as e:
-            print(f"Error pushing mouse tracking to LSL: {e}")
+            logger.error(f"Error pushing mouse tracking to LSL: {e}")
     
     def close(self):
         """Close the LSL stream outlet."""
@@ -175,11 +178,13 @@ class LSLRecorder:
         self.is_recording = False
         self.session_start_time: Optional[float] = None
     
-    def start_recording(self, wait_time: float = 1.0, stream_name_filters: Optional[List[str]] = None):
+    def start_recording(self, wait_time: float = 1.0, stream_name_filters: Optional[List[str]] = None, stream_type_filters: Optional[List[str]] = None):
         """Start recording LSL streams.
         
         Args:
             wait_time: Time in seconds to wait for resolving streams
+            stream_name_filters: Optional list of stream names to record (case-insensitive substring match)
+            stream_type_filters: Optional list of stream types to record (case-insensitive substring match)
         """
         if self.is_recording:
             return
@@ -187,27 +192,51 @@ class LSLRecorder:
         try:
             # Resolve available LSL streams
             # Note: resolve_streams() takes wait_time as positional argument, not keyword
-            print(f"Resolving LSL streams for session {self.session_id}...")
+            logger.info(f"Resolving LSL streams for session {self.session_id}...")
             streams = resolve_streams(wait_time)
 
             if not streams:
-                print("No LSL streams found.")
+                logger.info("No LSL streams found.")
                 return
 
-            # Optionally filter streams by name (exact or substring match, case-insensitive)
+            # Filter streams by name and/or type
             filtered_streams = []
-            if stream_name_filters:
-                lower_filters = [f.lower() for f in stream_name_filters if f]
+            
+            # If no filters provided, record all streams
+            if not stream_name_filters and not stream_type_filters:
+                filtered_streams = streams
+            else:
+                # Prepare filters (case-insensitive)
+                name_filters = [f.lower() for f in (stream_name_filters or []) if f]
+                type_filters = [f.lower() for f in (stream_type_filters or []) if f]
+                
                 for s in streams:
                     name = s.name() or ''
+                    stream_type = s.type() or ''
                     lname = name.lower()
-                    if any(f == lname or f in lname for f in lower_filters):
-                        filtered_streams.append(s)
-            else:
-                filtered_streams = streams
+                    ltype = stream_type.lower()
+                    
+                    # Match if name filter matches OR type filter matches (OR logic)
+                    # If both filters are provided, stream must match at least one
+                    name_match = not name_filters or any(f == lname or f in lname for f in name_filters)
+                    type_match = not type_filters or any(f == ltype or f in ltype for f in type_filters)
+                    
+                    # If only one filter type is provided, use that; if both, match either
+                    if name_filters and type_filters:
+                        # Both filters: match if name OR type matches
+                        if name_match or type_match:
+                            filtered_streams.append(s)
+                    elif name_filters:
+                        # Only name filter: must match name
+                        if name_match:
+                            filtered_streams.append(s)
+                    elif type_filters:
+                        # Only type filter: must match type
+                        if type_match:
+                            filtered_streams.append(s)
 
             if not filtered_streams:
-                print("No LSL streams matched the provided filters.")
+                logger.info("No LSL streams matched the provided filters.")
                 return
 
             # Create inlets for each selected stream
@@ -224,14 +253,14 @@ class LSLRecorder:
                     'session_id': self.session_id
                 }
                 self.stream_info.append(info)
-                print(f"Recording stream: {stream.name()} ({stream.type()})")
+                logger.info(f"Recording stream: {stream.name()} ({stream.type()})")
             
             self.session_start_time = local_clock()
             self.is_recording = True
-            print(f"Started recording {len(self.inlets)} LSL stream(s)")
+            logger.info(f"Started recording {len(self.inlets)} LSL stream(s)")
             
         except Exception as e:
-            print(f"Error starting LSL recording: {e}")
+            logger.error(f"Error starting LSL recording: {e}", exc_info=True)
             self.is_recording = False
     
     def record_sample(self):
@@ -300,7 +329,7 @@ class LSLRecorder:
                 pass
         
         self.inlets.clear()
-        print(f"Stopped recording. Captured {len(self.recorded_data)} samples.")
+        logger.info(f"Stopped recording. Captured {len(self.recorded_data)} samples.")
     
     def save_to_file(self, filepath: str, additional_tracking_data: Optional[List[Dict[str, Any]]] = None):
         """Save recorded data to a JSON file, including additional tracking data.
@@ -395,7 +424,7 @@ class LSLRecorder:
         total_items = len(self.recorded_data)
         if additional_tracking_data:
             total_items += len(additional_tracking_data)
-        print(f"Saved {len(self.recorded_data)} LSL samples" + 
+        logger.info(f"Saved {len(self.recorded_data)} LSL samples" + 
               (f" and {len(additional_tracking_data)} additional tracking events" if additional_tracking_data else "") +
               f" to {filepath}")
 
