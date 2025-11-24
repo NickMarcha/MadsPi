@@ -22,10 +22,10 @@ from PySide6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QSlider, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem,
-    QApplication, QToolTip, QRadioButton, QButtonGroup
+    QApplication, QToolTip, QRadioButton, QButtonGroup, QMenu, QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QUrl, QPointF, QRectF
-from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPen, QBrush, QPainter, QWheelEvent, QCursor
+from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPen, QBrush, QPainter, QWheelEvent, QCursor, QAction
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebChannel import QWebChannel
@@ -2972,6 +2972,8 @@ class SessionReviewWindow(QMainWindow):
         events_layout.addWidget(self.events_table)
         
         events_group.setLayout(events_layout)
+        # Connect toggled signal to hide/show content
+        events_group.toggled.connect(lambda checked: self._toggle_groupbox_content(events_group, checked))
         right_splitter.addWidget(events_group)
         
         # LSL data visualization with filter and pagination
@@ -3022,6 +3024,8 @@ class SessionReviewWindow(QMainWindow):
         self.lsl_table.cellClicked.connect(self._copy_table_cell)
 
         lsl_group.setLayout(lsl_layout)
+        # Connect toggled signal to hide/show content
+        lsl_group.toggled.connect(lambda checked: self._toggle_groupbox_content(lsl_group, checked))
         right_splitter.addWidget(lsl_group)
         
         right_splitter.setSizes([400, 300])
@@ -3033,34 +3037,37 @@ class SessionReviewWindow(QMainWindow):
         plots_group.setChecked(True)
         plots_layout = QVBoxLayout()
         
-        # Channel selection controls
+        # Channel selection controls - dropdown menu
         if MATPLOTLIB_AVAILABLE:
+            channel_controls_layout = QHBoxLayout()
             channel_controls_label = QLabel("Select channels to display:")
-            plots_layout.addWidget(channel_controls_label)
+            channel_controls_layout.addWidget(channel_controls_label)
             
-            # Scrollable area for checkboxes
-            channel_scroll = QScrollArea()
-            channel_scroll.setWidgetResizable(True)
-            channel_scroll.setMaximumHeight(120)
+            # Dropdown button for channel selection
+            self.channel_dropdown_button = QPushButton("Select Channels...")
+            self.channel_dropdown_button.setCheckable(False)
+            self.channel_menu = QMenu(self.channel_dropdown_button)
+            self.channel_dropdown_button.setMenu(self.channel_menu)
+            self.channel_actions = []  # Will store (action, stream_name, ch_idx)
+            channel_controls_layout.addWidget(self.channel_dropdown_button)
+            channel_controls_layout.addStretch()
             
-            channel_widget = QWidget()
-            self.channel_layout = QVBoxLayout(channel_widget)
-            self.channel_layout.setContentsMargins(0, 0, 0, 0)
-            self.channel_checkboxes = []  # Will store (checkbox, stream_name, ch_idx)
-            
-            channel_scroll.setWidget(channel_widget)
-            plots_layout.addWidget(channel_scroll)
+            plots_layout.addLayout(channel_controls_layout)
         
         if MATPLOTLIB_AVAILABLE:
             self.plot_canvas = FigureCanvas(Figure(figsize=(8, 4), dpi=100))
             self.plot_axes = self.plot_canvas.figure.subplots()
-            plots_layout.addWidget(self.plot_canvas)
+            # Set size policy to allow the plot to expand and take available space
+            self.plot_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            plots_layout.addWidget(self.plot_canvas, stretch=1)  # Add stretch factor
         else:
             no_plot_label = QLabel("matplotlib not available for graphing")
             no_plot_label.setStyleSheet("color: gray; font-style: italic;")
             plots_layout.addWidget(no_plot_label)
         
         plots_group.setLayout(plots_layout)
+        # Connect toggled signal to hide/show content
+        plots_group.toggled.connect(lambda checked: self._toggle_groupbox_content(plots_group, checked))
         right_splitter.addWidget(plots_group)
         
         right_splitter.setSizes([400, 300, 300])
@@ -3128,12 +3135,11 @@ class SessionReviewWindow(QMainWindow):
             
             logger.info(f"[SessionReview] Found {len(self.plot_channels)} numeric channels")
             
-            # Create checkboxes for each channel
-            if hasattr(self, 'channel_layout'):
-                # Clear existing checkboxes
-                while self.channel_layout.count():
-                    self.channel_layout.takeAt(0).widget().deleteLater()
-                self.channel_checkboxes = []
+            # Create dropdown menu items for each channel
+            if hasattr(self, 'channel_menu'):
+                # Clear existing menu actions
+                self.channel_menu.clear()
+                self.channel_actions = []
                 
                 for idx, (stream_name, ch_idx) in enumerate(self.plot_channels):
                     # Get channel label from stream_info if available
@@ -3148,14 +3154,18 @@ class SessionReviewWindow(QMainWindow):
                                         channel_label = f"{stream_name} - {channel_labels[label_key]}"
                                         break
                     
-                    checkbox = QCheckBox(channel_label)
+                    # Create checkable action
+                    action = QAction(channel_label, self.channel_menu)
+                    action.setCheckable(True)
                     # Check first 2 by default
-                    checkbox.setChecked(idx < 2)
-                    checkbox.stateChanged.connect(lambda: self._redraw_plots())
-                    self.channel_layout.addWidget(checkbox)
-                    self.channel_checkboxes.append((checkbox, stream_name, ch_idx))
-                
-                self.channel_layout.addStretch()
+                    action.setChecked(idx < 2)
+                    # Use lambda with default args to capture values correctly
+                    action.triggered.connect(lambda checked, stream=stream_name, channel=ch_idx: self._on_channel_toggled(stream, channel, checked))
+                    self.channel_menu.addAction(action)
+                    self.channel_actions.append((action, stream_name, ch_idx))
+            
+            # Update dropdown button text to show selected count
+            self._update_channel_dropdown_text()
             
             # Initial plot draw
             self._redraw_plots()
@@ -3183,9 +3193,9 @@ class SessionReviewWindow(QMainWindow):
             
             # Collect checked channels
             channels_to_plot = []
-            if hasattr(self, 'channel_checkboxes'):
-                for checkbox, stream_name, ch_idx in self.channel_checkboxes:
-                    if checkbox.isChecked():
+            if hasattr(self, 'channel_actions'):
+                for action, stream_name, ch_idx in self.channel_actions:
+                    if action.isChecked():
                         channels_to_plot.append((stream_name, ch_idx))
             
             if not channels_to_plot:
@@ -3264,6 +3274,68 @@ class SessionReviewWindow(QMainWindow):
                 return datetime.fromtimestamp(timestamp)
         return None
 
+    def _toggle_groupbox_content(self, groupbox: QGroupBox, checked: bool):
+        """Toggle visibility of QGroupBox content when checkbox is toggled.
+        
+        Args:
+            groupbox: The QGroupBox to toggle
+            checked: Whether the checkbox is checked (True = show, False = hide)
+        """
+        layout = groupbox.layout()
+        if layout:
+            # Hide/show all widgets in the layout
+            for i in range(layout.count()):
+                item = layout.itemAt(i)
+                if item:
+                    widget = item.widget()
+                    if widget:
+                        widget.setVisible(checked)
+                    # Also handle nested layouts
+                    layout_item = item.layout()
+                    if layout_item:
+                        for j in range(layout_item.count()):
+                            nested_item = layout_item.itemAt(j)
+                            if nested_item:
+                                nested_widget = nested_item.widget()
+                                if nested_widget:
+                                    nested_widget.setVisible(checked)
+        
+        # Also adjust the groupbox itself - when collapsed, minimize its size
+        if not checked:
+            # Collapsed: set minimum and maximum height to just the header
+            groupbox.setMinimumHeight(0)
+            groupbox.setMaximumHeight(30)  # Just enough for the checkbox header
+        else:
+            # Expanded: remove size restrictions
+            groupbox.setMinimumHeight(0)
+            groupbox.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX equivalent
+    
+    def _on_channel_toggled(self, stream_name: str, ch_idx: int, checked: bool):
+        """Handle channel selection toggle from dropdown menu.
+        
+        Args:
+            stream_name: Name of the stream
+            ch_idx: Channel index
+            checked: Whether the channel is now checked
+        """
+        self._redraw_plots()
+        self._update_channel_dropdown_text()
+    
+    def _update_channel_dropdown_text(self):
+        """Update the dropdown button text to show how many channels are selected."""
+        if not hasattr(self, 'channel_actions'):
+            return
+        
+        selected_count = sum(1 for action, _, _ in self.channel_actions if action.isChecked())
+        total_count = len(self.channel_actions)
+        
+        if selected_count == 0:
+            self.channel_dropdown_button.setText("Select Channels... (None selected)")
+        elif selected_count == total_count:
+            self.channel_dropdown_button.setText(f"Select Channels... (All {total_count} selected)")
+        else:
+            self.channel_dropdown_button.setText(f"Select Channels... ({selected_count}/{total_count} selected)")
+    
     def _format_time_ms(self, seconds: float) -> str:
         """Format seconds as MM:SS.mmm (minutes:seconds.milliseconds)."""
         try:
