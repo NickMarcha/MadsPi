@@ -378,10 +378,6 @@ class EditProjectDialog(QDialog):
         html_layout.addWidget(self.html_browse_button)
         self.config_layout.addRow("Local HTML:", html_layout)
         
-        self.marker_api_check = QCheckBox()
-        self.marker_api_check.setChecked(True)
-        self.config_layout.addRow("Enable Marker API:", self.marker_api_check)
-        
         self.enforce_fullscreen_check = QCheckBox()
         self.enforce_fullscreen_check.setChecked(False)
         self.enforce_fullscreen_check.toggled.connect(self._on_fullscreen_toggled)
@@ -482,7 +478,6 @@ class EditProjectDialog(QDialog):
                 self.webpage_url_edit.setText(config.webpage_url)
             if config.local_html_path:
                 self.local_html_edit.setText(str(config.local_html_path))
-            self.marker_api_check.setChecked(config.enable_marker_api)
             self.enforce_fullscreen_check.setChecked(config.enforce_fullscreen if hasattr(config, 'enforce_fullscreen') else False)
             if config.window_size:
                 self.window_width_spin.setValue(config.window_size[0])
@@ -541,7 +536,6 @@ class EditProjectDialog(QDialog):
             config.update({
                 'webpage_url': self.webpage_url_edit.text() if self.webpage_url_edit.text() else None,
                 'local_html_path': self.local_html_edit.text() if self.local_html_edit.text() else None,
-                'enable_marker_api': self.marker_api_check.isChecked(),
                 'fullscreen': True,  # Keep for backward compatibility
                 'window_size': window_size,
                 'enforce_fullscreen': self.enforce_fullscreen_check.isChecked(),
@@ -833,10 +827,18 @@ class ProjectDashboardWidget(QWidget):
         self.export_button.setMinimumHeight(80)
         self.export_button.clicked.connect(self.export_data_requested.emit)
         
+        self.open_export_folder_button = QPushButton("📂 Open Export Folder")
+        self.open_export_folder_button.setMinimumHeight(40)
+        self.open_export_folder_button.setToolTip("Open the project's export folder in file explorer")
+        self.open_export_folder_button.clicked.connect(self._open_export_folder)
+        
         actions_layout.addWidget(self.new_session_button, 0, 0)
         actions_layout.addWidget(self.debug_session_button, 0, 1)
         actions_layout.addWidget(self.review_sessions_button, 1, 0)
         actions_layout.addWidget(self.export_button, 1, 1)
+        
+        # Add open export folder button below export button
+        actions_layout.addWidget(self.open_export_folder_button, 2, 0, 1, 2)
         
         actions_group.setLayout(actions_layout)
         layout.addWidget(actions_group)
@@ -1077,6 +1079,34 @@ class ProjectDashboardWidget(QWidget):
                 self,
                 "Error",
                 f"An error occurred while refreshing: {e}"
+            )
+    
+    def _open_export_folder(self):
+        """Open the project's export folder in the system file explorer."""
+        import os
+        import subprocess
+        import platform
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            export_dir = self.project.project_path / "exports"
+            # Create the directory if it doesn't exist
+            export_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Open folder in system file explorer
+            if platform.system() == 'Windows':
+                os.startfile(str(export_dir))
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.run(['open', str(export_dir)])
+            else:  # Linux
+                subprocess.run(['xdg-open', str(export_dir)])
+        except Exception as e:
+            logger.error(f"Error opening export folder: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to open export folder:\n{e}"
             )
 
 
@@ -2856,6 +2886,11 @@ class SessionReviewWindow(QMainWindow):
         self.speed_combo.setCurrentText("1x")
         top_bar.addWidget(self.speed_combo)
         
+        # Export button
+        self.export_button = QPushButton("📥 Export Session")
+        self.export_button.clicked.connect(self._export_session_data)
+        top_bar.addWidget(self.export_button)
+        
         main_layout.addLayout(top_bar)
         
         # Main splitter: Video/Overlay | Events/LSL Data
@@ -3969,6 +4004,44 @@ class SessionReviewWindow(QMainWindow):
                 self.events_table.clearSelection()
         except Exception as e:
             logger.error(f"[SessionReview] Error highlighting event: {e}", exc_info=True)
+    
+    def _export_session_data(self):
+        """Export the current session's data."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Show export dialog for this session
+            dialog = ExportDataDialog(self.project, self.session, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            
+            options = dialog.get_export_options()
+            
+            # Export the session (should always be session level when called from here)
+            if options['export_level'] == "session" and options['session']:
+                export_path = self.project_manager.export_session_data(
+                    self.project,
+                    options['session'],
+                    export_format=options['export_format']
+                )
+                QMessageBox.information(
+                    self, "Success", 
+                    f"Session data exported successfully to:\n{export_path}"
+                )
+            else:
+                # Fallback to project export if somehow selected
+                export_path = self.project_manager.export_project_data(
+                    self.project,
+                    export_format=options['export_format']
+                )
+                QMessageBox.information(
+                    self, "Success", 
+                    f"Project data exported successfully to:\n{export_path}"
+                )
+        except Exception as e:
+            logger.error(f"[SessionReview] Error exporting session data: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to export data: {e}")
 
 
 class MainWindow(QMainWindow):
@@ -4184,10 +4257,16 @@ class MainWindow(QMainWindow):
                     from .models import EmbeddedWebpageConfig
                     # Preserve existing LSL config if it exists
                     existing_lsl_config = self.current_project.embedded_webpage_config.lsl_config if self.current_project.embedded_webpage_config else None
+                    # Get enable_marker_api from LSL config if available, otherwise from existing config, otherwise default to True
+                    enable_marker_api = True
+                    if existing_lsl_config:
+                        enable_marker_api = existing_lsl_config.enable_marker_api
+                    elif self.current_project.embedded_webpage_config:
+                        enable_marker_api = self.current_project.embedded_webpage_config.enable_marker_api
                     self.current_project.embedded_webpage_config = EmbeddedWebpageConfig(
                         webpage_url=dialog.project_config.get('webpage_url'),
                         local_html_path=Path(dialog.project_config.get('local_html_path')) if dialog.project_config.get('local_html_path') else None,
-                        enable_marker_api=dialog.project_config.get('enable_marker_api', True),
+                        enable_marker_api=enable_marker_api,  # Use value from LSL config or existing config
                         fullscreen=dialog.project_config.get('fullscreen', True),
                         allow_external_links=False,
                         window_size=dialog.project_config.get('window_size'),
