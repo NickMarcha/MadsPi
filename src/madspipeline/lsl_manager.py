@@ -566,11 +566,18 @@ class LSLStreamManagerDialog(QDialog):
             for stream in self.available_streams:
                 stream_name = stream.name()
                 channel_count = stream.channel_count()
-                desc = stream.desc()
                 
-                # Get channel labels from metadata
+                # Get channel labels from metadata - use inlet.info() for full metadata
+                # This is more reliable than stream.desc() which may not have complete metadata
                 channel_labels = {}
                 try:
+                    # Create a temporary inlet to get full metadata (including channel labels)
+                    # This is the recommended way to get complete stream metadata
+                    from pylsl import StreamInlet
+                    temp_inlet = StreamInlet(stream)
+                    inlet_info = temp_inlet.info()
+                    desc = inlet_info.desc()
+                    
                     chns = desc.child("channels")
                     if chns:
                         # Use next_sibling() method to iterate through channels (as per pylsl example)
@@ -639,11 +646,33 @@ class LSLStreamManagerDialog(QDialog):
                             import logging
                             logger = logging.getLogger(__name__)
                             logger.debug(f"Found {len(channel_labels)} channel labels for {stream_name}: {list(channel_labels.values())[:3]}")
+                    
+                    # Close the temporary inlet
+                    temp_inlet.close_stream()
                 except Exception as e:
                     import logging
                     logger = logging.getLogger(__name__)
-                    logger.warning(f"Could not read channel labels for {stream_name}: {e}", exc_info=True)
-                    pass
+                    logger.warning(f"Could not read channel labels for {stream_name} using inlet: {e}")
+                    # Fallback: try stream.desc() if inlet fails
+                    try:
+                        desc = stream.desc()
+                        chns = desc.child("channels")
+                        if chns:
+                            ch = chns.child("channel")
+                            i = 0
+                            while ch and i < channel_count:
+                                try:
+                                    label = ch.child_value("label") or f"Channel {i}"
+                                    channel_labels[i] = {'label': label, 'type': '', 'unit': ''}
+                                except:
+                                    channel_labels[i] = {'label': f"Channel {i}", 'type': '', 'unit': ''}
+                                try:
+                                    ch = ch.next_sibling()
+                                except:
+                                    break
+                                i += 1
+                    except Exception as fallback_error:
+                        logger.debug(f"Fallback to stream.desc() also failed: {fallback_error}")
                 
                 # Get selected channels for this stream (empty list means all)
                 selected_channels = channel_filters.get(stream_name, [])
@@ -1524,34 +1553,52 @@ class LSLStreamManagerDialog(QDialog):
             
             # Determine which channels to show based on filters
             if isinstance(data, list):
-                # Get filter for this stream
+                # IMPORTANT: The data is already filtered by record_sample(), so we need to map
+                # the filtered indices back to original channel indices
                 stream_filter = channel_filters.get(stream_name, [])
                 
-                # If filter exists and is not empty, only show filtered channels
-                # Otherwise show all channels
-                channels_to_show = range(len(data))
-                if stream_filter:
-                    channels_to_show = [ch_idx for ch_idx in stream_filter if 0 <= ch_idx < len(data)]
-                
-                for ch_idx in channels_to_show:
-                    if ch_idx >= len(data):
-                        continue
-                    
-                    value = data[ch_idx]
-                    
-                    # Get channel label
-                    if ch_idx in channel_labels:
-                        ch_label = channel_labels[ch_idx]
-                    else:
-                        ch_label = f"Ch {ch_idx}"
-                    
-                    channel_rows.append({
-                        'time': relative_time,
-                        'stream': stream_name,
-                        'channel': ch_idx,
-                        'label': ch_label,
-                        'value': value
-                    })
+                # If filter exists, data contains only filtered channels in order
+                # We need to map each value in data to its original channel index
+                if stream_filter and filtered_indices:
+                    # filtered_indices contains the original channel indices that were selected
+                    # data contains the filtered values in the same order
+                    for data_idx, original_ch_idx in enumerate(filtered_indices):
+                        if data_idx >= len(data):
+                            continue
+                        
+                        value = data[data_idx]
+                        
+                        # Get channel label using original channel index
+                        if original_ch_idx in channel_labels:
+                            ch_label = channel_labels[original_ch_idx]
+                        else:
+                            ch_label = f"Ch {original_ch_idx}"
+                        
+                        channel_rows.append({
+                            'time': relative_time,
+                            'stream': stream_name,
+                            'channel': original_ch_idx,
+                            'label': ch_label,
+                            'value': value
+                        })
+                else:
+                    # No filter - show all channels
+                    for ch_idx in range(len(data)):
+                        value = data[ch_idx]
+                        
+                        # Get channel label
+                        if ch_idx in channel_labels:
+                            ch_label = channel_labels[ch_idx]
+                        else:
+                            ch_label = f"Ch {ch_idx}"
+                        
+                        channel_rows.append({
+                            'time': relative_time,
+                            'stream': stream_name,
+                            'channel': ch_idx,
+                            'label': ch_label,
+                            'value': value
+                        })
             else:
                 # Single value (not a list) - show it
                 channel_rows.append({

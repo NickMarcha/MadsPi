@@ -376,8 +376,19 @@ class LSLRecorder:
                     if channel_filter:
                         try:
                             # Filter sample to only include selected channel indices
-                            filtered_sample = [sample[ch_idx] for ch_idx in channel_filter if 0 <= ch_idx < len(sample)]
-                            logger.debug(f"Filtered {stream_name}: {len(sample)} -> {len(filtered_sample)} channels")
+                            # Only include channels that are within bounds
+                            valid_indices = [ch_idx for ch_idx in channel_filter if 0 <= ch_idx < len(sample)]
+                            filtered_sample = [sample[ch_idx] for ch_idx in valid_indices]
+                            
+                            # Log which channels were actually included
+                            if len(valid_indices) != len(channel_filter):
+                                missing = set(channel_filter) - set(valid_indices)
+                                logger.warning(f"Filtered {stream_name}: requested {channel_filter}, but only {valid_indices} are valid (sample has {len(sample)} channels). Missing: {missing}")
+                            else:
+                                logger.debug(f"Filtered {stream_name}: {len(sample)} -> {len(filtered_sample)} channels (indices: {valid_indices})")
+                            
+                            # Update channel_filter to only include valid indices for storage
+                            channel_filter = valid_indices
                         except (IndexError, TypeError) as e:
                             logger.warning(f"Error filtering channels for {stream_name}: {e}, recording all channels")
                             filtered_sample = sample
