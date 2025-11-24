@@ -53,16 +53,31 @@ class StreamResolutionWorker(QThread):
     def run(self):
         """Run stream resolution in background thread."""
         import logging
+        import time
         logger = logging.getLogger(__name__)
         try:
             logger.info(f"StreamResolutionWorker: Starting stream resolution (wait_time={self.wait_time})")
-            self.recorder.start_recording(
-                wait_time=self.wait_time,
-                stream_name_filters=self.name_filters,
-                stream_channel_filters=self.channel_filters
-            )
-            logger.info(f"StreamResolutionWorker: Resolution complete, found {len(self.recorder.inlets)} streams")
+            start_time = time.time()
+            
+            # Call start_recording with timeout protection
+            try:
+                self.recorder.start_recording(
+                    wait_time=self.wait_time,
+                    stream_name_filters=self.name_filters,
+                    stream_channel_filters=self.channel_filters
+                )
+                elapsed = time.time() - start_time
+                logger.info(f"StreamResolutionWorker: Resolution complete in {elapsed:.2f}s, found {len(self.recorder.inlets)} streams")
+                logger.info(f"StreamResolutionWorker: is_recording={self.recorder.is_recording}, inlets={len(self.recorder.inlets)}")
+            except Exception as e:
+                elapsed = time.time() - start_time
+                logger.error(f"StreamResolutionWorker: Error during start_recording after {elapsed:.2f}s: {e}", exc_info=True)
+                raise
+            
+            # Always emit finished signal, even if something went wrong
+            logger.info("StreamResolutionWorker: Emitting finished signal")
             self.finished.emit(self.recorder)
+            logger.info("StreamResolutionWorker: Finished signal emitted")
         except Exception as e:
             logger.error(f"Error in stream resolution worker: {e}", exc_info=True)
             self.finished.emit(None)
@@ -1193,13 +1208,21 @@ class LSLStreamManagerDialog(QDialog):
             
             # Get channel filters from config for test mode
             channel_filters = getattr(self.current_config, 'stream_channel_filters', {})
-            name_filters = list(self.selected_streams) if self.selected_streams else None
+            
+            # For test mode, if no streams are selected, don't filter (show all streams)
+            # This allows testing even if user hasn't selected streams yet
+            name_filters = None
+            if self.selected_streams:
+                name_filters = list(self.selected_streams)
+                logger.info(f"Test mode: filtering streams by name: {name_filters}")
+            else:
+                logger.info("Test mode: no stream filters - will show all available streams")
             
             # Run stream resolution in background thread to avoid freezing UI
             self.test_button.setText("Resolving streams...")
             self.stream_resolution_worker = StreamResolutionWorker(
                 self.test_recorder,
-                wait_time=1.5,  # Reasonable wait time
+                wait_time=2.0,  # Increased wait time to ensure streams are discoverable
                 name_filters=name_filters,
                 channel_filters=channel_filters if channel_filters else None
             )
@@ -1217,8 +1240,10 @@ class LSLStreamManagerDialog(QDialog):
         import logging
         logger = logging.getLogger(__name__)
         
+        logger.info("Stream resolution worker finished, processing result...")
+        
         if recorder is None:
-            logger.error("Stream resolution failed")
+            logger.error("Stream resolution failed - recorder is None")
             QMessageBox.warning(self, "Error", "Failed to resolve LSL streams.")
             self.test_button.setEnabled(True)
             self.test_button.setText("Start Receiving Test")
@@ -1226,18 +1251,30 @@ class LSLStreamManagerDialog(QDialog):
         
         self.test_recorder = recorder
         logger.info(f"Recording started, found {len(self.test_recorder.inlets)} LSL streams")
+        logger.info(f"Test recorder is_recording flag: {self.test_recorder.is_recording}")
         
-        if not self.test_recorder.is_recording:
+        if not self.test_recorder.is_recording or len(self.test_recorder.inlets) == 0:
             logger.warning("Test recorder failed to find any LSL streams")
             
             # Check if BrainFlow was supposed to be running
             error_msg = "No LSL streams found for testing."
+            
+            # If we had filters, suggest they might be too restrictive
+            if self.selected_streams:
+                error_msg += f"\n\nYou have filters enabled for: {', '.join(self.selected_streams)}"
+                error_msg += "\nTry refreshing the stream list to see what streams are actually available."
+            
             if getattr(self.current_config, 'use_brainflow', False):
                 if self.brainflow_streamer:
                     if not (hasattr(self.brainflow_streamer, '_outlet') and self.brainflow_streamer._outlet):
                         error_msg += (
                             "\n\nNote: EmotiBit (BrainFlow) streamer is running but has no active stream. "
                             "The device may not be connected or may be in use by another program."
+                        )
+                    else:
+                        error_msg += (
+                            "\n\nNote: EmotiBit (BrainFlow) streamer appears to be running. "
+                            "Try refreshing the stream list or check if the stream name matches your filters."
                         )
                 else:
                     error_msg += (

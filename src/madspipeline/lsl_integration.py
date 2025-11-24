@@ -200,12 +200,18 @@ class LSLRecorder:
         try:
             # Resolve available LSL streams
             # Note: resolve_streams() takes wait_time as positional argument, not keyword
-            logger.info(f"Resolving LSL streams for session {self.session_id}...")
-            streams = resolve_streams(wait_time)
+            logger.info(f"Resolving LSL streams for session {self.session_id} (wait_time={wait_time}s)...")
+            try:
+                streams = resolve_streams(wait_time)
+            except Exception as e:
+                logger.error(f"Error during stream resolution: {e}", exc_info=True)
+                return
 
             if not streams:
                 logger.info("No LSL streams found.")
                 return
+            
+            logger.info(f"Found {len(streams)} LSL stream(s): {[s.name() for s in streams]}")
 
             # Filter streams by name and/or type
             filtered_streams = []
@@ -213,10 +219,14 @@ class LSLRecorder:
             # If no filters provided, record all streams
             if not stream_name_filters and not stream_type_filters:
                 filtered_streams = streams
+                logger.info(f"No filters provided - recording all {len(streams)} streams")
             else:
                 # Prepare filters (case-insensitive)
                 name_filters = [f.lower() for f in (stream_name_filters or []) if f]
                 type_filters = [f.lower() for f in (stream_type_filters or []) if f]
+                
+                logger.info(f"Filtering streams: name_filters={name_filters}, type_filters={type_filters}")
+                logger.info(f"Available streams: {[s.name() for s in streams]}")
                 
                 for s in streams:
                     name = s.name() or ''
@@ -234,51 +244,89 @@ class LSLRecorder:
                         # Both filters: match if name OR type matches
                         if name_match or type_match:
                             filtered_streams.append(s)
+                            logger.debug(f"Stream '{name}' matched (name_match={name_match}, type_match={type_match})")
                     elif name_filters:
                         # Only name filter: must match name
                         if name_match:
                             filtered_streams.append(s)
+                            logger.debug(f"Stream '{name}' matched name filter")
+                        else:
+                            logger.debug(f"Stream '{name}' did not match name filter {name_filters}")
                     elif type_filters:
                         # Only type filter: must match type
                         if type_match:
                             filtered_streams.append(s)
+                            logger.debug(f"Stream '{name}' matched type filter")
+                
+                logger.info(f"Filtered {len(streams)} streams down to {len(filtered_streams)} streams")
 
             if not filtered_streams:
+                logger.warning(f"No LSL streams matched the provided filters. Available streams: {[s.name() for s in streams]}")
                 logger.info("No LSL streams matched the provided filters.")
                 return
 
+            logger.info(f"Creating inlets for {len(filtered_streams)} filtered stream(s): {[s.name() for s in filtered_streams]}")
+            
             # Create inlets for each selected stream
-            for stream in filtered_streams:
-                inlet = StreamInlet(stream)
-                self.inlets.append(inlet)
-
+            for idx, stream in enumerate(filtered_streams):
                 stream_name = stream.name()
-                # Get full stream info from inlet (has complete metadata including channel labels)
-                inlet_info = inlet.info()
+                logger.info(f"Processing stream {idx+1}/{len(filtered_streams)}: {stream_name}")
+                try:
+                    logger.debug(f"Creating StreamInlet for {stream_name}")
+                    inlet = StreamInlet(stream)
+                    self.inlets.append(inlet)
+                    logger.info(f"Inlet created successfully for {stream_name}")
+                except Exception as e:
+                    logger.error(f"Failed to create inlet for {stream_name}: {e}", exc_info=True)
+                    continue
+
+                logger.debug(f"Getting stream info for {stream_name}")
+                try:
+                    # Get full stream info from inlet (has complete metadata including channel labels)
+                    # Note: info() should be fast, but if it hangs, we'll see it in the logs
+                    inlet_info = inlet.info()
+                    logger.info(f"Got inlet info for {stream_name} (channels: {inlet_info.channel_count()})")
+                except Exception as e:
+                    logger.error(f"Failed to get inlet info for {stream_name}: {e}", exc_info=True)
+                    inlet_info = None
                 
                 # Extract channel labels from metadata for easy access
                 channel_labels = {}
                 try:
-                    desc = inlet_info.desc()
-                    chns = desc.child("channels")
-                    if chns:
-                        ch = chns.child("channel")
-                        i = 0
-                        while ch:
-                            try:
-                                label = ch.child_value("label") or f"Channel {i}"
-                                channel_labels[i] = label
-                            except:
-                                channel_labels[i] = f"Channel {i}"
-                            try:
-                                ch = ch.next_sibling()
-                            except:
-                                break
-                            i += 1
+                    if inlet_info:
+                        logger.debug(f"Extracting channel labels for {stream_name}")
+                        desc = inlet_info.desc()
+                        if desc:
+                            chns = desc.child("channels")
+                            if chns:
+                                ch = chns.child("channel")
+                                i = 0
+                                max_channels = inlet_info.channel_count()
+                                logger.debug(f"Reading up to {max_channels} channel labels for {stream_name}")
+                                while ch and i < max_channels:
+                                    try:
+                                        label = ch.child_value("label") or f"Channel {i}"
+                                        channel_labels[i] = label
+                                    except Exception as e:
+                                        logger.debug(f"Error reading label for channel {i}: {e}")
+                                        channel_labels[i] = f"Channel {i}"
+                                    try:
+                                        ch = ch.next_sibling()
+                                    except:
+                                        break
+                                    i += 1
+                                logger.info(f"Extracted {len(channel_labels)} channel labels for {stream_name}")
+                            else:
+                                logger.debug(f"No channels metadata found for {stream_name}")
+                        else:
+                            logger.debug(f"No description metadata found for {stream_name}")
                 except Exception as e:
-                    logger.debug(f"Could not extract channel labels for {stream_name}: {e}")
+                    logger.warning(f"Could not extract channel labels for {stream_name}: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
                 
                 # Store stream info with full metadata
+                logger.debug(f"Storing stream info for {stream_name}")
                 info = {
                     'name': stream_name,
                     'type': stream.type(),
@@ -294,6 +342,7 @@ class LSLRecorder:
                 else:
                     logger.info(f"Recording stream: {stream_name} ({stream.type()})")
             
+            logger.debug("Setting session start time and is_recording flag")
             self.session_start_time = local_clock()
             self.is_recording = True
             logger.info(f"Started recording {len(self.inlets)} LSL stream(s)")
