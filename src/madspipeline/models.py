@@ -67,6 +67,9 @@ class LSLConfig:
     # Stream filtering: names and types to record
     additional_stream_filters: List[str] = field(default_factory=list)  # Stream name filters to record
     additional_stream_type_filters: List[str] = field(default_factory=list)  # Stream type filters to record (e.g., ['EmotiBit', 'EEG'])
+    # Channel filtering: which channels to record per stream
+    # Format: {stream_name: [channel_indices]} e.g., {"EmotiBit_BrainFlow": [0, 1, 2, 5]}
+    stream_channel_filters: Dict[str, List[int]] = field(default_factory=dict)  # Channel indices to record per stream
 
 
 @dataclass
@@ -144,7 +147,8 @@ class Project:
                     'brainflow_ip': getattr(self.embedded_webpage_config.lsl_config, 'brainflow_ip', None),
                     'brainflow_auto_start': getattr(self.embedded_webpage_config.lsl_config, 'brainflow_auto_start', False),
                     'additional_stream_filters': self.embedded_webpage_config.lsl_config.additional_stream_filters,
-                    'additional_stream_type_filters': getattr(self.embedded_webpage_config.lsl_config, 'additional_stream_type_filters', [])
+                    'additional_stream_type_filters': getattr(self.embedded_webpage_config.lsl_config, 'additional_stream_type_filters', []),
+                    'stream_channel_filters': getattr(self.embedded_webpage_config.lsl_config, 'stream_channel_filters', {})
                 }
             config_data['embedded_webpage'] = {
                 'webpage_url': self.embedded_webpage_config.webpage_url,
@@ -229,7 +233,8 @@ class Project:
                     brainflow_ip=lsl_cfg.get('brainflow_ip'),
                     brainflow_auto_start=lsl_cfg.get('brainflow_auto_start', False),
                     additional_stream_filters=lsl_cfg.get('additional_stream_filters', []),
-                    additional_stream_type_filters=lsl_cfg.get('additional_stream_type_filters', [])
+                    additional_stream_type_filters=lsl_cfg.get('additional_stream_type_filters', []),
+                    stream_channel_filters=lsl_cfg.get('stream_channel_filters', {})
                 )
             else:
                 # Create default LSL config from legacy enable_marker_api flag

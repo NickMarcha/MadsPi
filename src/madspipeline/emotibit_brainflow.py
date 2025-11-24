@@ -12,7 +12,7 @@ import time
 import threading
 
 try:
-    from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
+    from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds, BrainFlowPresets
     from brainflow.data_filter import DataFilter
     BRAINFLOW_AVAILABLE = True
 except Exception:
@@ -117,27 +117,71 @@ class EmotiBitBrainflowStreamer:
             # Get channel count and names from BrainFlow
             try:
                 n_channels = int(data.shape[0]) if data is not None and getattr(data, 'shape', None) else 16
-                # Try to get channel names from BrainFlow
-                # BrainFlow uses get_eeg_channels, get_emg_channels, etc. but for EmotiBit we need to check what's available
-                channel_names = []
-                try:
-                    # Try to get channel names - BrainFlow may have different methods
-                    if hasattr(BoardShim, 'get_eeg_channels'):
-                        eeg_ch = BoardShim.get_eeg_channels(board_id)
-                        if eeg_ch:
-                            channel_names.extend([f"EEG_{i}" for i in range(len(eeg_ch))])
-                except:
-                    pass
                 
-                # If we don't have channel names, use default EmotiBit channel names
-                # Based on typical EmotiBit data: Temperature, Humidity, EDA, PPG (IR, Red, Green), 
-                # Accelerometer (X,Y,Z), Gyroscope (X,Y,Z), Magnetometer (X,Y,Z), etc.
+                # Try to get channel names from BrainFlow using presets
+                # BrainFlow EmotiBit uses presets: DEFAULT_PRESET, AUXILIARY_PRESET, ANCILLARY_PRESET
+                channel_names = []
+                
+                # Map EmotiBit TypeTags to descriptive names based on documentation
+                # EmotiBit TypeTags order (typical): T1, H0, EA, PI, PR, PG, AX, AY, AZ, GX, GY, GZ, MX, MY, MZ
+                typetag_to_name = {
+                    "T1": "Temperature", "T0": "Temperature", "TH": "Temperature_Thermopile",
+                    "H0": "Humidity",
+                    "EA": "EDA", "EL": "EDL", "ER": "EDR",
+                    "PI": "PPG_IR", "PR": "PPG_Red", "PG": "PPG_Green",
+                    "AX": "Accel_X", "AY": "Accel_Y", "AZ": "Accel_Z",
+                    "GX": "Gyro_X", "GY": "Gyro_Y", "GZ": "Gyro_Z",
+                    "MX": "Mag_X", "MY": "Mag_Y", "MZ": "Mag_Z",
+                    "HR": "Heart_Rate", "BI": "Inter_Beat_Interval",
+                    "SA": "SCR_Amplitude", "SR": "SCR_Rise_Time", "SF": "SCR_Frequency"
+                }
+                
+                # Standard EmotiBit TypeTag order based on BrainFlow DEFAULT_PRESET
+                # This is the typical order for EmotiBit channels
+                emotibit_typetags = [
+                    "T1",  # Temperature
+                    "H0",  # Humidity (if available, may not be present on all devices)
+                    "EA",  # EDA - Electrodermal Activity
+                    "PI",  # PPG Infrared
+                    "PR",  # PPG Red
+                    "PG",  # PPG Green
+                    "AX",  # Accelerometer X
+                    "AY",  # Accelerometer Y
+                    "AZ",  # Accelerometer Z
+                    "GX",  # Gyroscope X
+                    "GY",  # Gyroscope Y
+                    "GZ",  # Gyroscope Z
+                    "MX",  # Magnetometer X
+                    "MY",  # Magnetometer Y
+                    "MZ",  # Magnetometer Z
+                ]
+                
+                # Try to map channels using TypeTags
+                # Use TypeTag names for the first channels that match the standard order
+                for i in range(min(n_channels, len(emotibit_typetags))):
+                    typetag = emotibit_typetags[i]
+                    channel_names.append(typetag_to_name.get(typetag, f"{typetag}_{i}"))
+                
+                # If we don't have enough channel names, use default EmotiBit channel names
+                # Based on EmotiBit TypeTags from documentation
                 if len(channel_names) < n_channels:
+                    # Standard EmotiBit channel order based on TypeTags
                     default_names = [
-                        "Temperature", "Humidity", "EDA", 
-                        "PPG_IR", "PPG_Red", "PPG_Green",
-                        "Accel_X", "Accel_Y", "Accel_Z",
-                        "Gyro_X", "Gyro_Y", "Gyro_Z"
+                        "Temperature",      # T1
+                        "Humidity",         # H0 (if available)
+                        "EDA",              # EA - Electrodermal Activity
+                        "PPG_IR",           # PI - PPG Infrared
+                        "PPG_Red",          # PR - PPG Red
+                        "PPG_Green",        # PG - PPG Green
+                        "Accel_X",          # AX
+                        "Accel_Y",          # AY
+                        "Accel_Z",          # AZ
+                        "Gyro_X",           # GX
+                        "Gyro_Y",           # GY
+                        "Gyro_Z",           # GZ
+                        "Mag_X",            # MX
+                        "Mag_Y",            # MY
+                        "Mag_Z",            # MZ
                     ]
                     # Extend to match channel count
                     while len(channel_names) < n_channels:
@@ -147,7 +191,7 @@ class EmotiBitBrainflowStreamer:
                         else:
                             channel_names.append(f"Channel_{idx}")
                 
-                logger.info(f"Using {len(channel_names)} channel names for {n_channels} channels")
+                logger.info(f"Using {len(channel_names)} channel names for {n_channels} channels: {channel_names[:min(5, len(channel_names))]}...")
             except Exception as e:
                 logger.warning(f"Could not determine channel names: {e}")
                 n_channels = 16
@@ -165,6 +209,35 @@ class EmotiBitBrainflowStreamer:
                 ch.append_child_value("label", str(ch_name))
                 ch.append_child_value("index", str(i))
                 ch.append_child_value("type", "EmotiBit")
+                
+                # Add unit based on EmotiBit TypeTags and documentation
+                # Units from EmotiBit documentation: degrees_celsius, percent, microsiemens, raw, g, degrees_per_second, microtesla, bpm, mS
+                ch_name_upper = ch_name.upper()
+                if "TEMPERATURE" in ch_name_upper or "T1" in ch_name_upper or "T0" in ch_name_upper or "TH" in ch_name_upper:
+                    ch.append_child_value("unit", "degrees_celsius")
+                elif "HUMIDITY" in ch_name_upper or "H0" in ch_name_upper:
+                    ch.append_child_value("unit", "percent")
+                elif "EDA" in ch_name_upper or "EA" in ch_name_upper or "EL" in ch_name_upper or "ER" in ch_name_upper:
+                    ch.append_child_value("unit", "microsiemens")
+                elif "PPG" in ch_name_upper or "PI" in ch_name_upper or "PR" in ch_name_upper or "PG" in ch_name_upper:
+                    ch.append_child_value("unit", "raw")
+                elif "ACCEL" in ch_name_upper or "AX" in ch_name_upper or "AY" in ch_name_upper or "AZ" in ch_name_upper:
+                    ch.append_child_value("unit", "g")
+                elif "GYRO" in ch_name_upper or "GX" in ch_name_upper or "GY" in ch_name_upper or "GZ" in ch_name_upper:
+                    ch.append_child_value("unit", "degrees_per_second")
+                elif "MAG" in ch_name_upper or "MX" in ch_name_upper or "MY" in ch_name_upper or "MZ" in ch_name_upper:
+                    ch.append_child_value("unit", "microtesla")  # Correct unit for magnetometer
+                elif "HEART_RATE" in ch_name_upper or "HR" in ch_name_upper:
+                    ch.append_child_value("unit", "bpm")
+                elif "INTER_BEAT" in ch_name_upper or "BI" in ch_name_upper:
+                    ch.append_child_value("unit", "mS")
+                elif "SCR" in ch_name_upper:
+                    if "AMPLITUDE" in ch_name_upper or "SA" in ch_name_upper:
+                        ch.append_child_value("unit", "microsiemens")
+                    elif "RISE_TIME" in ch_name_upper or "SR" in ch_name_upper:
+                        ch.append_child_value("unit", "seconds")
+                    elif "FREQUENCY" in ch_name_upper or "SF" in ch_name_upper:
+                        ch.append_child_value("unit", "Hz")
             
             # Add additional metadata
             desc.append_child_value("manufacturer", "EmotiBit")

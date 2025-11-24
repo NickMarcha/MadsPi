@@ -177,15 +177,23 @@ class LSLRecorder:
         self.stream_info: List[Dict[str, Any]] = []
         self.is_recording = False
         self.session_start_time: Optional[float] = None
+        self.stream_channel_filters: Dict[str, List[int]] = {}  # Channel indices to record per stream
     
-    def start_recording(self, wait_time: float = 1.0, stream_name_filters: Optional[List[str]] = None, stream_type_filters: Optional[List[str]] = None):
+    def start_recording(self, wait_time: float = 1.0, stream_name_filters: Optional[List[str]] = None, stream_type_filters: Optional[List[str]] = None, stream_channel_filters: Optional[Dict[str, List[int]]] = None):
         """Start recording LSL streams.
         
         Args:
             wait_time: Time in seconds to wait for resolving streams
             stream_name_filters: Optional list of stream names to record (case-insensitive substring match)
             stream_type_filters: Optional list of stream types to record (case-insensitive substring match)
+            stream_channel_filters: Optional dict mapping stream names to lists of channel indices to record
+                                   e.g., {"EmotiBit_BrainFlow": [0, 1, 2, 5]} - empty list means all channels
         """
+        # Store channel filters
+        if stream_channel_filters:
+            self.stream_channel_filters = stream_channel_filters
+        else:
+            self.stream_channel_filters = {}
         if self.is_recording:
             return
         
@@ -244,16 +252,47 @@ class LSLRecorder:
                 inlet = StreamInlet(stream)
                 self.inlets.append(inlet)
 
-                # Store stream info
+                stream_name = stream.name()
+                # Get full stream info from inlet (has complete metadata including channel labels)
+                inlet_info = inlet.info()
+                
+                # Extract channel labels from metadata for easy access
+                channel_labels = {}
+                try:
+                    desc = inlet_info.desc()
+                    chns = desc.child("channels")
+                    if chns:
+                        ch = chns.child("channel")
+                        i = 0
+                        while ch:
+                            try:
+                                label = ch.child_value("label") or f"Channel {i}"
+                                channel_labels[i] = label
+                            except:
+                                channel_labels[i] = f"Channel {i}"
+                            try:
+                                ch = ch.next_sibling()
+                            except:
+                                break
+                            i += 1
+                except Exception as e:
+                    logger.debug(f"Could not extract channel labels for {stream_name}: {e}")
+                
+                # Store stream info with full metadata
                 info = {
-                    'name': stream.name(),
+                    'name': stream_name,
                     'type': stream.type(),
                     'channel_count': stream.channel_count(),
                     'source_id': stream.source_id(),
-                    'session_id': self.session_id
+                    'session_id': self.session_id,
+                    'inlet_info': inlet_info,  # Store full StreamInfo object for metadata access
+                    'channel_labels': channel_labels  # Also store as dict for easy access
                 }
                 self.stream_info.append(info)
-                logger.info(f"Recording stream: {stream.name()} ({stream.type()})")
+                if channel_labels:
+                    logger.info(f"Recording stream: {stream_name} ({stream.type()}) with {len(channel_labels)} labeled channels")
+                else:
+                    logger.info(f"Recording stream: {stream_name} ({stream.type()})")
             
             self.session_start_time = local_clock()
             self.is_recording = True
@@ -279,6 +318,21 @@ class LSLRecorder:
                     continue
                 
                 if sample:
+                    # Apply channel filtering if configured for this stream
+                    stream_name = self.stream_info[i]['name']
+                    filtered_sample = sample
+                    channel_filter = self.stream_channel_filters.get(stream_name, [])
+                    
+                    # If channel filter exists and is not empty, filter the sample
+                    if channel_filter:
+                        try:
+                            # Filter sample to only include selected channel indices
+                            filtered_sample = [sample[ch_idx] for ch_idx in channel_filter if 0 <= ch_idx < len(sample)]
+                            logger.debug(f"Filtered {stream_name}: {len(sample)} -> {len(filtered_sample)} channels")
+                        except (IndexError, TypeError) as e:
+                            logger.warning(f"Error filtering channels for {stream_name}: {e}, recording all channels")
+                            filtered_sample = sample
+                    
                     # Calculate relative timestamp from session start
                     relative_time = timestamp - self.session_start_time if self.session_start_time else 0.0
                     
@@ -287,18 +341,25 @@ class LSLRecorder:
                     # and the local machine's clock. This is essential for proper synchronization.
                     clock_offset = inlet.time_correction()  # Returns offset in seconds
                     
-                    # Record the sample
+                    # Record the sample (with filtered channels if applicable)
+                    stream_info_copy = self.stream_info[i].copy()
+                    # Include channel_labels in the stream_info for easy access
                     recorded_sample = {
                         'timestamp': timestamp,
                         'relative_time': relative_time,
-                        'data': sample,
+                        'data': filtered_sample,
                         'stream_index': i,
-                        'stream_info': self.stream_info[i],
+                        'stream_info': stream_info_copy,  # Includes channel_labels
                         'session_id': self.session_id,
                         'recorded_at': datetime.now().isoformat(),
                         'clock_offset': clock_offset,  # NEW: For post-hoc synchronization
-                        'local_time_when_recorded': local_clock()  # NEW: Reference for offset measurement timing
+                        'local_time_when_recorded': local_clock(),  # NEW: Reference for offset measurement timing
+                        'original_channel_count': len(sample),  # Store original count for reference
+                        'filtered_channel_indices': channel_filter if channel_filter else None  # Store which channels were selected
                     }
+                    # Update stream_info to reflect filtered channel count
+                    if channel_filter:
+                        recorded_sample['stream_info']['channel_count'] = len(filtered_sample)
                     self.recorded_data.append(recorded_sample)
                     
             except Exception as e:

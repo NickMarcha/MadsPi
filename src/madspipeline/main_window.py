@@ -1663,19 +1663,23 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                             print(f"[LSL] Warning: Could not start BrainFlow streamer: {e}")
                     
                     # Create LSL recorder. If project LSL config includes filters,
-                    # pass them so only selected streams are recorded.
+                    # pass them so only selected streams and channels are recorded.
                     self.lsl_recorder = LSLRecorder(self.session.session_id)
                     name_filters = None
                     type_filters = None
+                    channel_filters = None
                     if lsl_config:
                         if getattr(lsl_config, 'additional_stream_filters', None):
                             name_filters = lsl_config.additional_stream_filters
                         if getattr(lsl_config, 'additional_stream_type_filters', None):
                             type_filters = lsl_config.additional_stream_type_filters
+                        if getattr(lsl_config, 'stream_channel_filters', None):
+                            channel_filters = lsl_config.stream_channel_filters
                     self.lsl_recorder.start_recording(
                         wait_time=2.0, 
                         stream_name_filters=name_filters,
-                        stream_type_filters=type_filters
+                        stream_type_filters=type_filters,
+                        stream_channel_filters=channel_filters
                     )
                     
                     # Push session_start event to LSL
