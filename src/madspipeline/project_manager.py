@@ -7,6 +7,68 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 import shutil
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def safe_write_json(filepath: Path, data: Dict[str, Any], indent: int = 2) -> None:
+    """Safely write JSON data to a file, creating parent directories if needed.
+    
+    Args:
+        filepath: Path to the JSON file to write
+        data: Dictionary to serialize to JSON
+        indent: JSON indentation level (default: 2)
+    """
+    try:
+        # Ensure parent directory exists
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        # Write JSON file
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=indent, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error writing JSON file {filepath}: {e}", exc_info=True)
+        raise
+
+
+def safe_read_json(filepath: Path) -> Optional[Dict[str, Any]]:
+    """Safely read JSON data from a file.
+    
+    Args:
+        filepath: Path to the JSON file to read
+        
+    Returns:
+        Dictionary with JSON data, or None if file doesn't exist or error occurs
+    """
+    try:
+        if not filepath.exists():
+            return None
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Error reading JSON file {filepath}: {e}", exc_info=True)
+        return None
+
+
+def safe_write_csv(filepath: Path, rows: List[Dict[str, Any]], fieldnames: List[str]) -> None:
+    """Safely write CSV data to a file, creating parent directories if needed.
+    
+    Args:
+        filepath: Path to the CSV file to write
+        rows: List of dictionaries to write as CSV rows
+        fieldnames: List of column names for the CSV header
+    """
+    try:
+        # Ensure parent directory exists
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        # Write CSV file
+        with open(filepath, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    except Exception as e:
+        logger.error(f"Error writing CSV file {filepath}: {e}", exc_info=True)
+        raise
 
 # Import local modules using relative imports
 from .models import Project, Session, TrackingData, Marker, ProjectType
@@ -55,7 +117,7 @@ class ProjectManager:
         
         # Create project directory structure
         project_path.mkdir(parents=True, exist_ok=True)
-        (project_path / "sessions").mkdir(exist_ok=True)
+        (project_path / "sessions").mkdir(parents=True, exist_ok=True)
         # Note: All session data (including recordings) is now stored in sessions/{session_id}/
         (project_path / "exports").mkdir(exist_ok=True)
         
@@ -179,8 +241,9 @@ class ProjectManager:
             raise FileNotFoundError(f"Project metadata not found at {metadata_file}")
         
         try:
-            with open(metadata_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            data = safe_read_json(metadata_file)
+            if data is None:
+                raise ValueError(f"Could not read project.json from {project_path}")
             logger.debug("Project JSON loaded")
         
             project = Project.from_dict(data)
@@ -196,16 +259,8 @@ class ProjectManager:
                        f"current version is {CURRENT_VERSION}. Migration may be needed.")
         
         # Scan sessions folder to find all sessions (instead of using project.sessions list)
-        sessions_dir = project_path / "sessions"
-        if sessions_dir.exists():
-            found_sessions = []
-            for session_dir in sessions_dir.iterdir():
-                if session_dir.is_dir():
-                    session_file = session_dir / "session.json"
-                    if session_file.exists():
-                        found_sessions.append(session_dir.name)
-            # Update project sessions list from filesystem
-            project.sessions = sorted(found_sessions)
+        # Use the Project's refresh_sessions method to discover sessions from filesystem
+        project.refresh_sessions()
         
         self.current_project = project
         return project
@@ -245,6 +300,9 @@ class ProjectManager:
         # Generate datetime-based session ID: YYYYMMDD_HHMMSS_microseconds
         # Use a more precise timestamp to avoid collisions
         session_id = now.strftime("%Y%m%d_%H%M%S_%f")
+        
+        # Refresh sessions list from filesystem to check for existing sessions
+        project.refresh_sessions()
         
         # If this ID already exists, add a counter to make it unique
         counter = 1
@@ -297,8 +355,7 @@ class ProjectManager:
         filename = f"tracking_{timestamp_str}.json"
         filepath = session_dir / filename
         
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(tracking_data.to_dict(), f, indent=2)
+        safe_write_json(filepath, tracking_data.to_dict())
     
     def save_marker(self, project: Project, session: Session, marker: Marker) -> None:
         """Save a marker for a session.
@@ -333,12 +390,7 @@ class ProjectManager:
         if not lsl_file.exists():
             return None
         
-        try:
-            with open(lsl_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"Error loading LSL data for session {session.session_id}: {e}")
-            return None
+        return safe_read_json(lsl_file)
     
     def _load_session_video_info(self, session: Session, project: Optional[Project] = None) -> Optional[Dict[str, Any]]:
         """Load video recording info for a session.
@@ -359,12 +411,7 @@ class ProjectManager:
         if not info_file.exists():
             return None
         
-        try:
-            with open(info_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"Error loading video info for session {session.session_id}: {e}")
-            return None
+        return safe_read_json(info_file)
     
     def export_session_data(self, project: Project, session: Session, 
                            export_format: str = "json",
@@ -381,7 +428,7 @@ class ProjectManager:
             Path to exported file
         """
         export_dir = project.project_path / "exports"
-        export_dir.mkdir(exist_ok=True)
+        export_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         if export_format.lower() == "json":
@@ -402,8 +449,7 @@ class ProjectManager:
                 'video_info': video_info
             }
             
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, indent=2)
+            safe_write_json(filepath, export_data)
         
         elif export_format.lower() == "csv":
             filename = f"{project.name}_session_{session.session_id}_export_{timestamp}.csv"
@@ -454,7 +500,7 @@ class ProjectManager:
             Path to exported file
         """
         export_dir = project.project_path / "exports"
-        export_dir.mkdir(exist_ok=True)
+        export_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         if export_format.lower() == "json":
@@ -468,6 +514,9 @@ class ProjectManager:
                 'sessions': []
             }
             
+            # Refresh sessions list from filesystem before exporting
+            project.refresh_sessions()
+            
             # Load all sessions and their data
             for session_id in project.sessions:
                 session = self._load_session_metadata(project, session_id)
@@ -479,14 +528,16 @@ class ProjectManager:
                     }
                     export_data['sessions'].append(session_export)
             
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, indent=2)
+            safe_write_json(filepath, export_data)
         
         elif export_format.lower() == "csv":
             filename = f"{project.name}_export_{timestamp}.csv"
             filepath = export_dir / filename
             
             all_rows = []
+            
+            # Refresh sessions list from filesystem before exporting
+            project.refresh_sessions()
             
             # Load all sessions and their data
             for session_id in project.sessions:
@@ -510,10 +561,7 @@ class ProjectManager:
             fieldnames = sorted(all_fieldnames)
             
             # Write CSV
-            with open(filepath, 'w', encoding='utf-8', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(all_rows)
+            safe_write_csv(filepath, all_rows, fieldnames)
         
         else:
             raise ValueError(f"Unsupported export format: {export_format}")
@@ -672,8 +720,7 @@ class ProjectManager:
             project: Project instance to save
         """
         metadata_file = project.project_path / "project.json"
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(project.to_dict(), f, indent=2)
+        safe_write_json(metadata_file, project.to_dict())
     
     def _save_session_metadata(self, project: Project, session: Session) -> None:
         """Save session metadata to file.
@@ -683,11 +730,8 @@ class ProjectManager:
             session: Session instance to save
         """
         session_dir = project.project_path / "sessions" / session.session_id
-        session_dir.mkdir(exist_ok=True)
-        
         metadata_file = session_dir / "session.json"
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(session.to_dict(), f, indent=2)
+        safe_write_json(metadata_file, session.to_dict())
     
     def _load_session_metadata(self, project: Project, session_id: str) -> Optional[Session]:
         """Load session metadata from file.
@@ -706,8 +750,9 @@ class ProjectManager:
             return None
         
         try:
-            with open(metadata_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            data = safe_read_json(metadata_file)
+            if data is None:
+                return None
             return Session.from_dict(data)
         except Exception as e:
             logger.warning(f"Error loading session {session_id}: {e}")
@@ -729,9 +774,9 @@ class ProjectManager:
         
         try:
             for data_file in session_dir.glob("tracking_*.json"):
-                with open(data_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                tracking_data.append(TrackingData.from_dict(data))
+                data = safe_read_json(data_file)
+                if data:
+                    tracking_data.append(TrackingData.from_dict(data))
         except Exception as e:
             logger.warning(f"Error loading tracking data for session {session.session_id}: {e}")
         
@@ -750,22 +795,23 @@ class ProjectManager:
             True if session was deleted successfully, False otherwise
         """
         try:
-            # Remove session from project's session list
-            if session_id in project.sessions:
-                project.sessions.remove(session_id)
+            # Refresh sessions list from filesystem first
+            project.refresh_sessions()
+            
+            # Delete session directory and all its contents
+            # All session data (including recordings) is in sessions/{session_id}/
+            session_dir = project.project_path / "sessions" / session_id
+            if session_dir.exists():
+                shutil.rmtree(session_dir)
+                # Refresh sessions list after deletion
+                project.refresh_sessions()
                 project.modified_date = datetime.now()
-                
-                # Delete session directory and all its contents
-                # All session data (including recordings) is in sessions/{session_id}/
-                session_dir = project.project_path / "sessions" / session_id
-                if session_dir.exists():
-                    shutil.rmtree(session_dir)
-                
-                # Save updated project metadata
+                # Save updated project metadata (but not sessions list - it's derived from filesystem)
                 self._save_project_metadata(project)
-                
                 return True
             else:
+                # Session directory doesn't exist, but refresh list anyway
+                project.refresh_sessions()
                 return False
                 
         except Exception as e:

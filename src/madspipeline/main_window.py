@@ -864,6 +864,8 @@ class ProjectDashboardWidget(QWidget):
             project: Updated project instance
         """
         self.project = project
+        # Refresh sessions list from filesystem before updating UI
+        self.project.refresh_sessions()
         self._refresh_project_info()
         self._refresh_sessions()
     
@@ -1424,6 +1426,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     
     def _setup_ui(self):
         """Set up the session window UI."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
@@ -1500,6 +1505,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         # Set up persistent storage for better media handling
         try:
+            import logging
+            logger = logging.getLogger(__name__)
+            
             profile = self.web_view.page().profile()
             # Enable persistent cookies and cache for better media loading
             profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
@@ -1677,9 +1685,19 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                             self.brainflow_streamer = EmotiBitBrainflowStreamer(ip_address=ip)
                             self.brainflow_streamer.start()
                             logger.info("[LSL] Started BrainFlow EmotiBit streamer")
-                            # Give streamer time to start before resolving streams
+                            # Wait for BrainFlow streamer to create LSL outlet (can take 5-10 seconds)
                             import time
-                            time.sleep(1.0)
+                            max_wait = 10.0  # Maximum wait time in seconds
+                            wait_interval = 0.5  # Check every 0.5 seconds
+                            waited = 0.0
+                            while waited < max_wait:
+                                if hasattr(self.brainflow_streamer, '_outlet') and self.brainflow_streamer._outlet is not None:
+                                    logger.info(f"[LSL] BrainFlow LSL outlet created after {waited:.1f}s")
+                                    break
+                                time.sleep(wait_interval)
+                                waited += wait_interval
+                            else:
+                                logger.warning(f"[LSL] BrainFlow streamer started but LSL outlet not created after {max_wait}s - proceeding anyway")
                         except Exception as e:
                             logger.warning(f"[LSL] Could not start BrainFlow streamer: {e}")
                     
@@ -1746,6 +1764,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         Args:
             event_data: Event dictionary with type, data, timestamp
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
             event_type = event_data.get('type', 'unknown')
             event_data_dict = event_data.get('data', {})
@@ -1968,11 +1989,16 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     
     def _end_session(self):
         """End the session and save data."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Prevent double execution
         if self._session_ending:
+            logger.debug("[Session] _end_session called but session already ending, ignoring")
             return
         
         self._session_ending = True
+        logger.info("[Session] Ending session and saving data...")
         
         # Stop any playing video in the webpage - use multiple strategies
         try:
@@ -2061,13 +2087,23 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         # Temporarily restore recorders for saving
         self._screen_recorder_ref = screen_recorder_to_save
         self.lsl_recorder = lsl_recorder_to_save
-        self._save_session_data()
-        # Now we can set them to None
-        self.lsl_recorder = None
-        self._screen_recorder_ref = None
+        try:
+            self._save_session_data()
+            logger.info("[Session] Session data saved successfully")
+        except Exception as e:
+            logger.error(f"[Session] Error saving session data: {e}", exc_info=True)
+            # Still emit signal and close window even if save failed
+        finally:
+            # Now we can set them to None
+            self.lsl_recorder = None
+            self._screen_recorder_ref = None
         
         # Emit session ended signal
-        self.session_ended.emit(self.session.session_id)
+        try:
+            self.session_ended.emit(self.session.session_id)
+            logger.info("[Session] Session ended signal emitted")
+        except Exception as e:
+            logger.error(f"[Session] Error emitting session_ended signal: {e}", exc_info=True)
         
         # Close window after a short delay to allow page to unload and stop media
         # This ensures the video stops before the window closes
@@ -2075,6 +2111,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
     
     def _save_session_data(self):
         """Save session LSL recorded data (all data goes through LSL)."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Create tracking data directory
         # All session data is now in sessions/{session_id}/
         tracking_dir = self.project.project_path / "sessions" / self.session.session_id
@@ -2085,8 +2124,8 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             try:
                 recording_info = self._screen_recorder_ref.get_recording_info()
                 info_file = tracking_dir / f"screen_recording_info_{self.session.session_id}.json"
-                with open(info_file, 'w', encoding='utf-8') as f:
-                    json.dump(recording_info, f, indent=2)
+                from .project_manager import safe_write_json
+                safe_write_json(info_file, recording_info)
                 logger.info(f"Saved recording metadata to {info_file}")
             except Exception as e:
                 logger.warning(f"Could not save recording metadata: {e}")
@@ -2125,13 +2164,28 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                         'lsl_samples': [],
                         'error': str(e)
                     }
-                    with open(lsl_file, 'w', encoding='utf-8') as f:
-                        json.dump(minimal_lsl_data, f, indent=2)
+                    from .project_manager import safe_write_json
+                    safe_write_json(lsl_file, minimal_lsl_data)
                     logger.warning(f"Saved minimal LSL file structure to {lsl_file} (error occurred during save)")
                 except Exception as e2:
                     logger.error(f"Could not save even minimal LSL file: {e2}", exc_info=True)
         else:
             logger.warning(f"LSL recorder is None, cannot save LSL data")
+            # Even if recorder is None, create an empty LSL file to indicate the session was recorded
+            try:
+                empty_lsl_data = {
+                    'session_id': self.session.session_id,
+                    'stream_info': [],
+                    'session_start_time': None,
+                    'total_samples': 0,
+                    'lsl_samples': [],
+                    'error': 'LSL recorder was None - no streams were recorded'
+                }
+                from .project_manager import safe_write_json
+                safe_write_json(lsl_file, empty_lsl_data)
+                logger.warning(f"Created empty LSL file (no recorder): {lsl_file}")
+            except Exception as e:
+                logger.error(f"Could not create empty LSL file: {e}", exc_info=True)
         
         # Update session metadata (tracking_data_path removed - always sessions/{session_id}/)
         self.session.modified_date = datetime.now()
@@ -2518,8 +2572,10 @@ class SessionReviewWindow(QMainWindow):
             lsl_session_start_time = None  # Will extract from LSL metadata
             if lsl_file.exists():
                 try:
-                    with open(lsl_file, 'r', encoding='utf-8') as f:
-                        lsl_data = json.load(f)
+                    from .project_manager import safe_read_json
+                    lsl_data = safe_read_json(lsl_file)
+                    if lsl_data is None:
+                        raise ValueError(f"Could not read LSL file: {lsl_file}")
                         # Extract recorded samples (structure: lsl_samples array)
                         self.lsl_data = lsl_data.get('lsl_samples', [])
                         # Extract session_start_time from metadata for offset calculation
@@ -2563,8 +2619,10 @@ class SessionReviewWindow(QMainWindow):
             info_file = tracking_dir / f"screen_recording_info_{self.session.session_id}.json"
             if info_file.exists():
                 try:
-                    with open(info_file, 'r', encoding='utf-8') as f:
-                        recording_info = json.load(f)
+                    from .project_manager import safe_read_json
+                    recording_info = safe_read_json(info_file)
+                    if recording_info is None:
+                        raise ValueError(f"Could not read recording info file: {info_file}")
                     lsl_first_frame_time = recording_info.get('lsl_first_frame_time')
                     if lsl_first_frame_time and lsl_session_start_time is not None:
                         # Convert absolute LSL time to relative time (from session start)

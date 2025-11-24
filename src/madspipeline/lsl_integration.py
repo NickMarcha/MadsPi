@@ -538,9 +538,8 @@ class LSLRecorder:
             output_data['additional_tracking_data'] = additional_tracking_data
             output_data['total_tracking_events'] = len(additional_tracking_data)
         
-        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(output_data, f, indent=2)
+        from .project_manager import safe_write_json
+        safe_write_json(Path(filepath), output_data)
         
         total_items = len(self.recorded_data)
         if additional_tracking_data:

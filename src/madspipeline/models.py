@@ -95,8 +95,25 @@ class Project:
     created_date: datetime
     modified_date: datetime
     project_path: Path
-    sessions: List[str] = field(default_factory=list)  # List of session IDs (deprecated: scanned from filesystem)
+    sessions: List[str] = field(default_factory=list)  # List of session IDs (discovered from filesystem, not stored in JSON)
     version: str = "1.0"  # Project structure version for future migrations
+    
+    def refresh_sessions(self) -> List[str]:
+        """Refresh the sessions list by scanning the filesystem.
+        
+        Returns:
+            List of session IDs found in the sessions directory
+        """
+        sessions_dir = self.project_path / "sessions"
+        found_sessions = []
+        if sessions_dir.exists():
+            for session_dir in sessions_dir.iterdir():
+                if session_dir.is_dir():
+                    session_file = session_dir / "session.json"
+                    if session_file.exists():
+                        found_sessions.append(session_dir.name)
+        self.sessions = sorted(found_sessions)
+        return self.sessions
     
     # Type-specific configuration
     picture_slideshow_config: Optional[PictureSlideshowConfig] = None
@@ -169,7 +186,7 @@ class Project:
             'created_date': self.created_date.isoformat(),
             'modified_date': self.modified_date.isoformat(),
             'project_path': str(self.project_path),
-            'sessions': self.sessions,  # Kept for backward compatibility, but not used on load
+            # Note: 'sessions' is no longer stored - sessions are discovered from filesystem
             'version': self.version,
             'config': config_data
         }
@@ -263,7 +280,7 @@ class Project:
             created_date=datetime.fromisoformat(data['created_date']),
             modified_date=datetime.fromisoformat(data['modified_date']),
             project_path=Path(data['project_path']),
-            sessions=data.get('sessions', []),  # Loaded but ignored - sessions scanned from filesystem
+            sessions=[],  # Always empty on load - sessions are discovered from filesystem by ProjectManager
             version=data.get('version', '1.0'),  # Default to 1.0 for old projects
             picture_slideshow_config=picture_slideshow_config,
             video_config=video_config,
