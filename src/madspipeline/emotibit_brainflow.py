@@ -114,17 +114,67 @@ class EmotiBitBrainflowStreamer:
                 time.sleep(0.2)
                 data = board.get_board_data()
 
-            # Fallback channel count
+            # Get channel count and names from BrainFlow
             try:
                 n_channels = int(data.shape[0]) if data is not None and getattr(data, 'shape', None) else 16
-            except Exception:
+                # Try to get channel names from BrainFlow
+                # BrainFlow uses get_eeg_channels, get_emg_channels, etc. but for EmotiBit we need to check what's available
+                channel_names = []
+                try:
+                    # Try to get channel names - BrainFlow may have different methods
+                    if hasattr(BoardShim, 'get_eeg_channels'):
+                        eeg_ch = BoardShim.get_eeg_channels(board_id)
+                        if eeg_ch:
+                            channel_names.extend([f"EEG_{i}" for i in range(len(eeg_ch))])
+                except:
+                    pass
+                
+                # If we don't have channel names, use default EmotiBit channel names
+                # Based on typical EmotiBit data: Temperature, Humidity, EDA, PPG (IR, Red, Green), 
+                # Accelerometer (X,Y,Z), Gyroscope (X,Y,Z), Magnetometer (X,Y,Z), etc.
+                if len(channel_names) < n_channels:
+                    default_names = [
+                        "Temperature", "Humidity", "EDA", 
+                        "PPG_IR", "PPG_Red", "PPG_Green",
+                        "Accel_X", "Accel_Y", "Accel_Z",
+                        "Gyro_X", "Gyro_Y", "Gyro_Z"
+                    ]
+                    # Extend to match channel count
+                    while len(channel_names) < n_channels:
+                        idx = len(channel_names)
+                        if idx < len(default_names):
+                            channel_names.append(default_names[idx])
+                        else:
+                            channel_names.append(f"Channel_{idx}")
+                
+                logger.info(f"Using {len(channel_names)} channel names for {n_channels} channels")
+            except Exception as e:
+                logger.warning(f"Could not determine channel names: {e}")
                 n_channels = 16
+                channel_names = [f"Channel_{i}" for i in range(n_channels)]
+            
             logger.info(f"Creating LSL stream with {n_channels} channels")
 
             info = StreamInfo('EmotiBit_BrainFlow', 'EmotiBit', n_channels, self.nominal_srate, 'float32', 'emotibit_brainflow_0')
+            
+            # Add channel labels to LSL stream metadata
+            desc = info.desc()
+            chns = desc.append_child("channels")
+            for i, ch_name in enumerate(channel_names[:n_channels]):
+                ch = chns.append_child("channel")
+                ch.append_child_value("label", str(ch_name))
+                ch.append_child_value("index", str(i))
+                ch.append_child_value("type", "EmotiBit")
+            
+            # Add additional metadata
+            desc.append_child_value("manufacturer", "EmotiBit")
+            desc.append_child_value("device_id", getattr(params, 'serial_number', 'unknown'))
+            if self.ip_address:
+                desc.append_child_value("ip_address", self.ip_address)
+            
             outlet = StreamOutlet(info)
             self._outlet = outlet
-            logger.info("LSL outlet created successfully")
+            logger.info(f"LSL outlet created successfully with {n_channels} labeled channels")
 
             # Main loop: read and push samples
             while not self._stop_event.is_set():

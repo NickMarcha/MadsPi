@@ -501,29 +501,75 @@ class LSLStreamManagerDialog(QDialog):
         stream = self.available_streams[sel]
         try:
             desc = stream.desc()
-            # Try several ways to extract channel info; fall back to stringifying desc
-            channels_text = None
+            channel_count = stream.channel_count()
+            
+            # Try to extract channel names from LSL metadata
+            channel_info = []
             try:
-                # Some pylsl StreamInfo desc has to_xml or to_string
-                if hasattr(desc, 'to_xml'):
-                    channels_text = desc.to_xml()
-                elif hasattr(desc, 'to_string'):
-                    channels_text = desc.to_string()
+                chns = desc.child("channels")
+                if chns and chns.child_count() > 0:
+                    for i in range(chns.child_count()):
+                        ch = chns.child(i)
+                        label = ch.child_value("label") or f"Channel {i}"
+                        ch_type = ch.child_value("type") or "Unknown"
+                        unit = ch.child_value("unit") or ""
+                        channel_info.append(f"Channel {i}: {label} ({ch_type})" + (f" [{unit}]" if unit else ""))
                 else:
-                    channels_text = str(desc)
+                    # No channel metadata, create generic labels
+                    for i in range(channel_count):
+                        channel_info.append(f"Channel {i}: (unlabeled)")
+            except Exception as e:
+                # Fallback: create generic labels
+                for i in range(channel_count):
+                    channel_info.append(f"Channel {i}: (metadata not available)")
+            
+            # Create formatted display
+            info_text = f"Stream: {stream.name()}\n"
+            info_text += f"Type: {stream.type()}\n"
+            info_text += f"Channels: {channel_count}\n"
+            info_text += f"Sample Rate: {stream.nominal_srate()} Hz\n\n"
+            info_text += "Channel Details:\n"
+            info_text += "=" * 50 + "\n"
+            for ch_info in channel_info:
+                info_text += ch_info + "\n"
+            
+            info_text += "\n" + "=" * 50 + "\n"
+            info_text += "\nFull XML Metadata:\n"
+            info_text += "-" * 50 + "\n"
+            
+            # Add full XML for reference
+            try:
+                if hasattr(desc, 'to_xml'):
+                    info_text += desc.to_xml()
+                elif hasattr(desc, 'to_string'):
+                    info_text += desc.to_string()
+                else:
+                    info_text += str(desc)
             except Exception:
-                channels_text = str(desc)
+                info_text += "Unable to retrieve full metadata"
 
             # Show in a scrollable dialog
             dlg = QDialog(self)
-            dlg.setWindowTitle(f"Channels: {stream.name()}")
+            dlg.setWindowTitle(f"Channel Information: {stream.name()}")
             dlg.setModal(True)
-            dlg.setMinimumSize(600, 400)
+            dlg.setMinimumSize(700, 500)
             layout = QVBoxLayout(dlg)
+            
+            info_label = QLabel("Channel Information")
+            info_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+            layout.addWidget(info_label)
+            
             text = QTextEdit()
             text.setReadOnly(True)
-            text.setPlainText(channels_text)
+            text.setPlainText(info_text)
+            text.setFont(QFont("Courier", 9))
             layout.addWidget(text)
+            
+            note_label = QLabel("Note: Channel filtering/selection is a planned feature for future releases.")
+            note_label.setWordWrap(True)
+            note_label.setStyleSheet("color: gray; font-style: italic;")
+            layout.addWidget(note_label)
+            
             btn = QPushButton("Close")
             btn.clicked.connect(dlg.accept)
             layout.addWidget(btn)
@@ -568,8 +614,11 @@ class LSLStreamManagerDialog(QDialog):
             
             logger.info("BrainFlow streamer thread started")
             
-            # Give it a moment to connect, then check status
-            QTimer.singleShot(3000, self._check_brainflow_status)
+            # Give it more time to connect (auto-discovery can take 5+ seconds), then check status
+            # Check multiple times to catch when it actually connects
+            QTimer.singleShot(2000, self._check_brainflow_status)  # First check at 2s
+            QTimer.singleShot(5000, self._check_brainflow_status)  # Second check at 5s
+            QTimer.singleShot(8000, self._check_brainflow_status)  # Final check at 8s
             
             QMessageBox.information(
                 self, 
@@ -598,13 +647,23 @@ class LSLStreamManagerDialog(QDialog):
                 self.emotibit_status_label.setText("Status: Running (LSL stream active)")
                 self.emotibit_status_label.setStyleSheet("color: green;")
             logger.info("BrainFlow streamer confirmed active with LSL outlet")
+            # Refresh streams to show the new stream
+            if LSL_AVAILABLE:
+                QTimer.singleShot(500, self._refresh_streams)
         else:
             # Check if it's still trying to connect or if it failed
             if hasattr(self.brainflow_streamer, '_started') and self.brainflow_streamer._started:
-                if hasattr(self, 'emotibit_status_label'):
-                    self.emotibit_status_label.setText("Status: Connection failed - check logs and device")
-                    self.emotibit_status_label.setStyleSheet("color: red;")
-                logger.warning("BrainFlow streamer started but LSL outlet not created - connection may have failed")
+                # Check if board is still trying to connect (board exists but no outlet yet)
+                if hasattr(self.brainflow_streamer, '_board') and self.brainflow_streamer._board:
+                    if hasattr(self, 'emotibit_status_label'):
+                        self.emotibit_status_label.setText("Status: Connecting... (this may take 5-10 seconds)")
+                        self.emotibit_status_label.setStyleSheet("color: orange;")
+                    logger.debug("BrainFlow streamer still connecting...")
+                else:
+                    if hasattr(self, 'emotibit_status_label'):
+                        self.emotibit_status_label.setText("Status: Connection failed - check logs and device")
+                        self.emotibit_status_label.setStyleSheet("color: red;")
+                    logger.warning("BrainFlow streamer started but LSL outlet not created - connection may have failed")
     
     def _stop_brainflow_streamer(self):
         """Stop the BrainFlow-based streamer if running."""
