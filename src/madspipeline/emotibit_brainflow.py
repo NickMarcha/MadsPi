@@ -251,82 +251,84 @@ class EmotiBitBrainflowStreamer:
 
             # Get channel count and names from BrainFlow
             try:
-                n_channels = int(data.shape[0]) if data is not None and getattr(data, 'shape', None) else 16
+                # Try to get board description to understand channel layout
+                try:
+                    board_descr = BoardShim.get_board_descr(board_id)
+                    logger.info(f"BrainFlow board description: {board_descr}")
+                    # Log specific channel information if available
+                    if 'temperature_channels' in board_descr:
+                        logger.info(f"Temperature channels: {board_descr['temperature_channels']}")
+                    if 'eda_channels' in board_descr:
+                        logger.info(f"EDA channels: {board_descr['eda_channels']}")
+                    if 'ppg_channels' in board_descr:
+                        logger.info(f"PPG channels: {board_descr['ppg_channels']}")
+                    if 'accel_channels' in board_descr:
+                        logger.info(f"Accelerometer channels: {board_descr['accel_channels']}")
+                except Exception as e:
+                    logger.debug(f"Could not get board description: {e}")
                 
-                # Try to get channel names from BrainFlow using presets
-                # BrainFlow EmotiBit uses presets: DEFAULT_PRESET, AUXILIARY_PRESET, ANCILLARY_PRESET
+                # Determine channel structure from all presets
+                # Based on log analysis:
+                # - ANCILLARY_PRESET (6 channels): package_num(0), humidity/EDA(1), temperature(2), temperature/EDA(3), timestamp(4), marker(5)
+                # - AUXILIARY_PRESET (6 channels): package_num(0), PPG_IR(1), PPG_Red(2), PPG_Green(3), timestamp(4), marker(5)
+                # - DEFAULT_PRESET (12 channels): package_num(0), accel(1-3), gyro(4-6), mag(7-9), timestamp(10), marker(11)
+                
+                # Wait a bit for data to accumulate in all presets
+                time.sleep(0.5)
+                
+                # Try to get data from each preset to determine structure
+                data_anc = None
+                data_aux = None
+                data_default = None
+                
+                try:
+                    data_anc = board.get_current_board_data(1, BrainFlowPresets.ANCILLARY_PRESET)
+                except Exception:
+                    pass
+                
+                try:
+                    data_aux = board.get_current_board_data(1, BrainFlowPresets.AUXILIARY_PRESET)
+                except Exception:
+                    pass
+                
+                try:
+                    data_default = board.get_current_board_data(1, BrainFlowPresets.DEFAULT_PRESET)
+                except Exception:
+                    pass
+                
+                # Build combined channel list in order: ANCILLARY, AUXILIARY, DEFAULT
                 channel_names = []
                 
-                # Map EmotiBit TypeTags to descriptive names based on documentation
-                # EmotiBit TypeTags order (typical): T1, H0, EA, PI, PR, PG, AX, AY, AZ, GX, GY, GZ, MX, MY, MZ
-                typetag_to_name = {
-                    "T1": "Temperature", "T0": "Temperature", "TH": "Temperature_Thermopile",
-                    "H0": "Humidity",
-                    "EA": "EDA", "EL": "EDL", "ER": "EDR",
-                    "PI": "PPG_IR", "PR": "PPG_Red", "PG": "PPG_Green",
-                    "AX": "Accel_X", "AY": "Accel_Y", "AZ": "Accel_Z",
-                    "GX": "Gyro_X", "GY": "Gyro_Y", "GZ": "Gyro_Z",
-                    "MX": "Mag_X", "MY": "Mag_Y", "MZ": "Mag_Z",
-                    "HR": "Heart_Rate", "BI": "Inter_Beat_Interval",
-                    "SA": "SCR_Amplitude", "SR": "SCR_Rise_Time", "SF": "SCR_Frequency"
-                }
+                # ANCILLARY_PRESET: channels 1-3 (skip package_num, timestamp, marker)
+                # Based on logs: channel 1 = humidity/EDA, channel 2 = temperature, channel 3 = EDA
+                if data_anc is not None and data_anc.size > 0 and data_anc.shape[0] >= 4:
+                    channel_names.extend(["Humidity", "Temperature", "EDA"])
                 
-                # Standard EmotiBit TypeTag order based on BrainFlow DEFAULT_PRESET
-                # This is the typical order for EmotiBit channels
-                emotibit_typetags = [
-                    "T1",  # Temperature
-                    "H0",  # Humidity (if available, may not be present on all devices)
-                    "EA",  # EDA - Electrodermal Activity
-                    "PI",  # PPG Infrared
-                    "PR",  # PPG Red
-                    "PG",  # PPG Green
-                    "AX",  # Accelerometer X
-                    "AY",  # Accelerometer Y
-                    "AZ",  # Accelerometer Z
-                    "GX",  # Gyroscope X
-                    "GY",  # Gyroscope Y
-                    "GZ",  # Gyroscope Z
-                    "MX",  # Magnetometer X
-                    "MY",  # Magnetometer Y
-                    "MZ",  # Magnetometer Z
-                ]
+                # AUXILIARY_PRESET: channels 1-3 (skip package_num, timestamp, marker)
+                # Based on logs: channels 1-3 are PPG_IR, PPG_Red, PPG_Green
+                if data_aux is not None and data_aux.size > 0 and data_aux.shape[0] >= 4:
+                    channel_names.extend(["PPG_IR", "PPG_Red", "PPG_Green"])
                 
-                # Try to map channels using TypeTags
-                # Use TypeTag names for the first channels that match the standard order
-                for i in range(min(n_channels, len(emotibit_typetags))):
-                    typetag = emotibit_typetags[i]
-                    channel_names.append(typetag_to_name.get(typetag, f"{typetag}_{i}"))
+                # DEFAULT_PRESET: channels 1-9 (skip package_num, timestamp, marker)
+                # Motion sensors: accel (1-3), gyro (4-6), mag (7-9)
+                if data_default is not None and data_default.size > 0 and data_default.shape[0] >= 10:
+                    channel_names.extend(["Accel_X", "Accel_Y", "Accel_Z", 
+                                        "Gyro_X", "Gyro_Y", "Gyro_Z",
+                                        "Mag_X", "Mag_Y", "Mag_Z"])
                 
-                # If we don't have enough channel names, use default EmotiBit channel names
-                # Based on EmotiBit TypeTags from documentation
-                if len(channel_names) < n_channels:
-                    # Standard EmotiBit channel order based on TypeTags
-                    default_names = [
-                        "Temperature",      # T1
-                        "Humidity",         # H0 (if available)
-                        "EDA",              # EA - Electrodermal Activity
-                        "PPG_IR",           # PI - PPG Infrared
-                        "PPG_Red",          # PR - PPG Red
-                        "PPG_Green",        # PG - PPG Green
-                        "Accel_X",          # AX
-                        "Accel_Y",          # AY
-                        "Accel_Z",          # AZ
-                        "Gyro_X",           # GX
-                        "Gyro_Y",           # GY
-                        "Gyro_Z",           # GZ
-                        "Mag_X",            # MX
-                        "Mag_Y",            # MY
-                        "Mag_Z",            # MZ
-                    ]
-                    # Extend to match channel count
-                    while len(channel_names) < n_channels:
-                        idx = len(channel_names)
-                        if idx < len(default_names):
-                            channel_names.append(default_names[idx])
-                        else:
-                            channel_names.append(f"Channel_{idx}")
+                n_channels = len(channel_names)
                 
-                logger.info(f"Using {len(channel_names)} channel names for {n_channels} channels: {channel_names[:min(5, len(channel_names))]}...")
+                # Fallback if no data available yet
+                if n_channels == 0:
+                    # Use expected structure based on documentation
+                    channel_names = ["Humidity", "Temperature", "EDA", 
+                                   "PPG_IR", "PPG_Red", "PPG_Green",
+                                   "Accel_X", "Accel_Y", "Accel_Z", 
+                                   "Gyro_X", "Gyro_Y", "Gyro_Z",
+                                   "Mag_X", "Mag_Y", "Mag_Z"]
+                    n_channels = len(channel_names)
+                
+                logger.info(f"Using {len(channel_names)} channel names: {channel_names}")
             except Exception as e:
                 logger.warning(f"Could not determine channel names: {e}")
                 n_channels = 16
@@ -384,25 +386,144 @@ class EmotiBitBrainflowStreamer:
             self._outlet = outlet
             logger.info(f"LSL outlet created successfully with {n_channels} labeled channels")
 
-            # Main loop: read and push samples
+            # Check available presets and log data from each
+            # Wait a bit for data to accumulate before checking
+            time.sleep(1.0)
+            try:
+                available_presets = BoardShim.get_board_presets(board_id)
+                logger.info(f"Available BrainFlow presets for EmotiBit: {available_presets}")
+                logger.info(f"Preset mapping: 0=DEFAULT_PRESET, 1=AUXILIARY_PRESET, 2=ANCILLARY_PRESET")
+                
+                # Try to get data from each preset to understand the structure
+                # Use get_current_board_data() which reads recent data without clearing the buffer
+                try:
+                    data_default = board.get_current_board_data(10, BrainFlowPresets.DEFAULT_PRESET)
+                    if data_default is not None and data_default.size > 0:
+                        logger.info(f"DEFAULT_PRESET: shape={data_default.shape}, first sample (all channels): {data_default[:, 0].tolist() if data_default.shape[1] > 0 else 'no data'}")
+                    else:
+                        logger.info(f"DEFAULT_PRESET: No data available yet (shape: {data_default.shape if data_default is not None else 'None'})")
+                except Exception as e:
+                    logger.warning(f"Could not read DEFAULT_PRESET: {e}")
+                
+                try:
+                    data_aux = board.get_current_board_data(10, BrainFlowPresets.AUXILIARY_PRESET)
+                    if data_aux is not None and data_aux.size > 0:
+                        logger.info(f"AUXILIARY_PRESET: shape={data_aux.shape}, first sample (all channels): {data_aux[:, 0].tolist() if data_aux.shape[1] > 0 else 'no data'}")
+                        # Log which channels have non-zero data (PPG should be in specific channels)
+                        non_zero_channels = [i for i in range(data_aux.shape[0]) if data_aux.shape[1] > 0 and abs(data_aux[i, 0]) > 0.001]
+                        logger.info(f"AUXILIARY_PRESET: Channels with data: {non_zero_channels}")
+                    else:
+                        logger.info(f"AUXILIARY_PRESET: No data available yet (shape: {data_aux.shape if data_aux is not None else 'None'})")
+                except Exception as e:
+                    logger.warning(f"Could not read AUXILIARY_PRESET: {e}")
+                
+                try:
+                    data_anc = board.get_current_board_data(10, BrainFlowPresets.ANCILLARY_PRESET)
+                    if data_anc is not None and data_anc.size > 0:
+                        logger.info(f"ANCILLARY_PRESET: shape={data_anc.shape}, first sample (all channels): {data_anc[:, 0].tolist() if data_anc.shape[1] > 0 else 'no data'}")
+                        # Log which channels have non-zero data (Temperature/EDA should be in specific channels)
+                        non_zero_channels = [i for i in range(data_anc.shape[0]) if data_anc.shape[1] > 0 and abs(data_anc[i, 0]) > 0.001]
+                        logger.info(f"ANCILLARY_PRESET: Channels with data: {non_zero_channels}")
+                    else:
+                        logger.info(f"ANCILLARY_PRESET: No data available yet (shape: {data_anc.shape if data_anc is not None else 'None'})")
+                except Exception as e:
+                    logger.warning(f"Could not read ANCILLARY_PRESET: {e}")
+            except Exception as e:
+                logger.warning(f"Could not check presets: {e}")
+
+            # Main loop: read from all three presets and combine into single stream
+            # - ANCILLARY_PRESET: temperature, humidity, EDA
+            # - AUXILIARY_PRESET: PPG (IR, Red, Green)
+            # - DEFAULT_PRESET: motion sensors (accel, gyro, mag)
+            first_sample_logged = False
+            last_anc_data = None
+            last_aux_data = None
+            last_default_data = None
+            
             while not self._stop_event.is_set():
-                data = board.get_board_data()
-                if data is None or getattr(data, 'size', 0) == 0:
-                    time.sleep(0.01)
-                    continue
+                # Read from all three presets
+                data_anc = None
+                data_aux = None
+                data_default = None
+                
+                try:
+                    data_anc = board.get_current_board_data(1, BrainFlowPresets.ANCILLARY_PRESET)
+                    if data_anc is not None and data_anc.size > 0 and data_anc.shape[1] > 0:
+                        last_anc_data = data_anc[:, -1]  # Get most recent sample
+                except Exception as e:
+                    logger.debug(f"Could not read ANCILLARY_PRESET: {e}")
+                
+                try:
+                    data_aux = board.get_current_board_data(1, BrainFlowPresets.AUXILIARY_PRESET)
+                    if data_aux is not None and data_aux.size > 0 and data_aux.shape[1] > 0:
+                        last_aux_data = data_aux[:, -1]  # Get most recent sample
+                except Exception as e:
+                    logger.debug(f"Could not read AUXILIARY_PRESET: {e}")
+                
+                try:
+                    data_default = board.get_current_board_data(1, BrainFlowPresets.DEFAULT_PRESET)
+                    if data_default is not None and data_default.size > 0 and data_default.shape[1] > 0:
+                        last_default_data = data_default[:, -1]  # Get most recent sample
+                except Exception as e:
+                    logger.debug(f"Could not read DEFAULT_PRESET: {e}")
+                
+                # Combine data from all presets into single sample
+                # Order: ANCILLARY (humidity, temperature, EDA), AUXILIARY (PPG), DEFAULT (motion)
+                combined_sample = []
+                
+                # ANCILLARY_PRESET: channels 1, 2, 3 (humidity, temperature, EDA)
+                if last_anc_data is not None and len(last_anc_data) >= 4:
+                    combined_sample.extend([
+                        float(last_anc_data[1]),  # Humidity
+                        float(last_anc_data[2]),  # Temperature
+                        float(last_anc_data[3])   # EDA
+                    ])
+                else:
+                    # Use zeros if no data available
+                    combined_sample.extend([0.0, 0.0, 0.0])
+                
+                # AUXILIARY_PRESET: channels 1, 2, 3 (PPG_IR, PPG_Red, PPG_Green)
+                if last_aux_data is not None and len(last_aux_data) >= 4:
+                    combined_sample.extend([
+                        float(last_aux_data[1]),  # PPG_IR
+                        float(last_aux_data[2]),  # PPG_Red
+                        float(last_aux_data[3])   # PPG_Green
+                    ])
+                else:
+                    # Use zeros if no data available
+                    combined_sample.extend([0.0, 0.0, 0.0])
+                
+                # DEFAULT_PRESET: channels 1-9 (accel, gyro, mag)
+                if last_default_data is not None and len(last_default_data) >= 10:
+                    combined_sample.extend([
+                        float(last_default_data[1]),  # Accel_X
+                        float(last_default_data[2]),  # Accel_Y
+                        float(last_default_data[3]),  # Accel_Z
+                        float(last_default_data[4]),  # Gyro_X
+                        float(last_default_data[5]),  # Gyro_Y
+                        float(last_default_data[6]),  # Gyro_Z
+                        float(last_default_data[7]),  # Mag_X
+                        float(last_default_data[8]),  # Mag_Y
+                        float(last_default_data[9])   # Mag_Z
+                    ])
+                else:
+                    # Use zeros if no data available
+                    combined_sample.extend([0.0] * 9)
+                
+                # Log first combined sample
+                if not first_sample_logged:
+                    logger.info(f"First combined sample: {combined_sample}")
+                    first_sample_logged = True
+                
+                # Push combined sample to LSL
+                try:
+                    outlet.push_sample(combined_sample, timestamp=local_clock())
+                except Exception as e:
+                    logger.debug(f"LSL push error: {e}")
+                    pass
 
-                n_samples = data.shape[1]
-                # push sample-by-sample with current LSL timestamp
-                for i in range(n_samples):
-                    row = data[:, i].astype(float).tolist()
-                    try:
-                        outlet.push_sample(row, timestamp=local_clock())
-                    except Exception:
-                        # swallow occasional LSL errors to keep streaming
-                        pass
-
-                # small sleep to avoid busy-loop
-                time.sleep(0.001)
+                # Small sleep to avoid busy-loop
+                time.sleep(0.04)  # ~25 Hz (matching EmotiBit sampling rate)
 
         except Exception as e:
             error_msg = str(e)
