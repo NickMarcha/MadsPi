@@ -388,6 +388,128 @@ class ProjectManager:
         
         return safe_read_json(lsl_file)
     
+    def _add_linear_fits_to_lsl_data(self, lsl_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate and add linear fit parameters to LSL data if not already present.
+        
+        This allows existing recordings to get linear fits added during export.
+        
+        Args:
+            lsl_data: LSL data dictionary loaded from file
+            
+        Returns:
+            LSL data dictionary with linear fits added
+        """
+        if not lsl_data or 'lsl_samples' not in lsl_data:
+            return lsl_data
+        
+        # Check if linear fits already exist
+        has_linear_fits = False
+        for stream_info in lsl_data.get('stream_info', []):
+            if 'clock_sync_linear_fit' in stream_info:
+                has_linear_fits = True
+                break
+        
+        # If linear fits already exist, return as-is
+        if has_linear_fits:
+            return lsl_data
+        
+        # Group samples by stream to calculate per-stream linear fits
+        stream_offsets = {}  # {stream_name: [(time, offset), ...]}
+        for sample in lsl_data.get('lsl_samples', []):
+            stream_name = sample.get('stream_name')
+            if stream_name and sample.get('clock_offset') is not None:
+                measurement_time = sample.get('local_time_when_recorded')
+                if measurement_time is None:
+                    measurement_time = sample.get('timestamp')
+                if measurement_time is not None:
+                    if stream_name not in stream_offsets:
+                        stream_offsets[stream_name] = []
+                    stream_offsets[stream_name].append((measurement_time, sample.get('clock_offset')))
+        
+        # Calculate linear fit for each stream
+        stream_linear_fits = {}
+        try:
+            import numpy as np
+            for stream_name, offset_data in stream_offsets.items():
+                if len(offset_data) > 1:  # Need at least 2 points for linear fit
+                    times, offsets = zip(*offset_data)
+                    times = np.array(times)
+                    offsets = np.array(offsets)
+                    
+                    # Calculate linear fit: offset(t) = slope * t + intercept
+                    fit_coeffs = np.polyfit(times, offsets, 1)
+                    slope = float(fit_coeffs[0])
+                    intercept = float(fit_coeffs[1])
+                    
+                    # Calculate R-squared for fit quality
+                    fitted_offsets = slope * times + intercept
+                    ss_res = np.sum((offsets - fitted_offsets) ** 2)
+                    ss_tot = np.sum((offsets - np.mean(offsets)) ** 2)
+                    r_squared = float(1 - (ss_res / ss_tot)) if ss_tot > 0 else 0.0
+                    
+                    # Calculate standard error
+                    n = len(offsets)
+                    std_err = float(np.sqrt(ss_res / (n - 2))) if n > 2 else 0.0
+                    
+                    stream_linear_fits[stream_name] = {
+                        'slope': slope,
+                        'intercept': intercept,
+                        'r_squared': r_squared,
+                        'std_err': std_err,
+                        'n_points': n,
+                        'formula': f'offset(t) = {slope:.2e} * t + {intercept:.2e}'
+                    }
+                elif len(offset_data) == 1:
+                    # Single point - can't calculate fit, but store the offset
+                    times, offsets = zip(*offset_data)
+                    stream_linear_fits[stream_name] = {
+                        'slope': 0.0,
+                        'intercept': float(offsets[0]),
+                        'r_squared': None,
+                        'std_err': None,
+                        'n_points': 1,
+                        'formula': f'offset(t) = {offsets[0]:.2e} (constant, single measurement)'
+                    }
+        except ImportError:
+            logger.warning("numpy not available, skipping linear fit calculation during export")
+        except Exception as e:
+            logger.warning(f"Error calculating linear fits during export: {e}", exc_info=True)
+        
+        # Add linear fit offset to each sample
+        for sample in lsl_data.get('lsl_samples', []):
+            stream_name = sample.get('stream_name')
+            if stream_name in stream_linear_fits:
+                fit = stream_linear_fits[stream_name]
+                measurement_time = sample.get('local_time_when_recorded')
+                if measurement_time is None:
+                    measurement_time = sample.get('timestamp')
+                
+                if measurement_time is not None and fit['n_points'] > 1:
+                    # Calculate offset from linear fit: offset(t) = slope * t + intercept
+                    linear_fit_offset = fit['slope'] * measurement_time + fit['intercept']
+                    sample['linear_fit_offset'] = linear_fit_offset
+                elif fit['n_points'] == 1:
+                    # Single measurement - use constant offset
+                    sample['linear_fit_offset'] = fit['intercept']
+        
+        # Add linear fit information to stream_info
+        for stream_info in lsl_data.get('stream_info', []):
+            stream_name = stream_info.get('name')
+            if stream_name in stream_linear_fits:
+                stream_info['clock_sync_linear_fit'] = stream_linear_fits[stream_name]
+        
+        # Update synchronization_info to indicate linear fits are available
+        if 'synchronization_info' in lsl_data:
+            lsl_data['synchronization_info']['linear_fit_available'] = len(stream_linear_fits) > 0
+            if len(stream_linear_fits) > 0:
+                lsl_data['synchronization_info']['note'] = (
+                    lsl_data['synchronization_info'].get('note', '') + 
+                    ' Linear fit parameters calculated during export and stored in stream_info["clock_sync_linear_fit"].'
+                )
+        
+        logger.info(f"Added linear fits for {len(stream_linear_fits)} stream(s) during export")
+        return lsl_data
+    
     def _load_session_video_info(self, session: Session, project: Optional[Project] = None) -> Optional[Dict[str, Any]]:
         """Load video recording info for a session.
         
@@ -433,6 +555,10 @@ class ProjectManager:
             
             # Load LSL data
             lsl_data = self._load_session_lsl_data(session, project)
+            
+            # Calculate linear fits if not already present (for backward compatibility with old recordings)
+            if lsl_data:
+                lsl_data = self._add_linear_fits_to_lsl_data(lsl_data)
             
             # Load video info
             video_info = self._load_session_video_info(session, project)
@@ -517,9 +643,14 @@ class ProjectManager:
             for session_id in project.sessions:
                 session = self._load_session_metadata(project, session_id)
                 if session:
+                    lsl_data = self._load_session_lsl_data(session, project)
+                    # Calculate linear fits if not already present (for backward compatibility)
+                    if lsl_data:
+                        lsl_data = self._add_linear_fits_to_lsl_data(lsl_data)
+                    
                     session_export = {
                         'session': session.to_dict(),
-                        'lsl_data': self._load_session_lsl_data(session, project),
+                        'lsl_data': lsl_data,
                         'video_info': self._load_session_video_info(session, project)
                     }
                     export_data['sessions'].append(session_export)

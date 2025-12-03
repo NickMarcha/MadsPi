@@ -25,11 +25,47 @@ Single data entry explanation
         -9.277000427246094,
         8.392000198364258
     ],
-    "clock_offset": -2.0349999431346077e-05,          // LSL clock offset measurement (device clock - local clock)
+    "clock_offset": -2.0349999431346077e-05,          // LSL clock offset measurement (device clock - local clock) at this moment
     "local_time_when_recorded": 11484.9960957,        // Local LSL time when clock offset was measured
+    "linear_fit_offset": -1.145554212761944e-05,      // Clock offset calculated from linear fit (accounts for clock drift, more accurate)
     "synchronization_applied": true                   // Flag indicating timestamp synchronization is active
 }
 ```
+
+### Clock Offset vs Linear Fit Offset
+
+**Two offset fields are provided for different use cases:**
+
+1. **`clock_offset`** (Raw Measurement):
+   - The actual clock offset measured by LSL at this specific moment
+   - Direct measurement from `inlet.time_correction()`
+   - Use when you need the exact offset at that instant
+   - Can be noisy due to network jitter
+
+2. **`linear_fit_offset`** (Smoothed Estimate):
+   - Calculated from a linear fit through all clock offset measurements in the session
+   - Formula: `offset(t) = slope * time + intercept` (see `stream_info["clock_sync_linear_fit"]`)
+   - Accounts for clock drift over time (more accurate for longer recordings)
+   - Smoothes out measurement noise
+   - **Recommended for most analysis** as it's more accurate
+
+**Linear Fit Parameters** (stored in `stream_info["clock_sync_linear_fit"]`):
+```json
+{
+    "slope": -3.788948325185762e-08,        // Rate of clock drift (seconds per second)
+    "intercept": 0.0004237035036472227,     // Initial offset at t=0
+    "r_squared": 0.009814991711005527,      // Fit quality (0-1, higher is better)
+    "std_err": 1.1453716390782549e-05,      // Standard error of the fit
+    "n_points": 2630,                       // Number of offset measurements used
+    "formula": "offset(t) = -3.79e-08 * t + 4.24e-04"
+}
+```
+
+**When to use which:**
+- **Use `clock_offset`**: For real-time applications, or when you need the exact measurement at that moment
+- **Use `linear_fit_offset`**: For offline analysis, longer recordings, or when you need the most accurate synchronization (accounts for drift)
+
+**Note**: The `timestamp` field uses `clock_offset` (simple approach). For improved accuracy, you can recalculate: `synchronized_timestamp = original_timestamp + linear_fit_offset`
 
 ### Channel Mapping (Important: Filtered Channels)
 
@@ -163,7 +199,9 @@ Bridge events have **multiple timestamps** because they pass through multiple st
 ## Notes
 
 - **`original_timestamp`**: Present in exports from **November 2025 onwards** (after synchronization implementation). Older exports won't have this field.
+- **`linear_fit_offset`**: Present in exports from **December 2025 onwards** (after linear fit implementation). Calculated during export for both new and existing recordings. If not present, use `clock_offset` instead. See "Clock Offset vs Linear Fit Offset" section above for details.
 - **Channel filtering**: The `channel_labels` in `stream_info` now shows **only the channels that were recorded**, not all available channels. The keys ("0", "1", "2", ...) match the `data` array indices directly. Use `filtered_channel_indices` to see which original channel numbers were recorded, and `original_channel_count` to see how many total channels were available in the stream.
 - **Session stores channel info**: All channel mapping information is stored in the session/export files. You don't need to check project settings - the `stream_info` contains everything you need.
 - **Data vs Raw Data**: For numeric streams they're identical; for markers, `data` is parsed JSON and `raw_data` is the original string.
 - **No recording fault**: If you see 6 channels in the data and 6 in channel_labels (but 12 in original_channel_count), this is normal - it means channel filtering was applied during recording. Only the selected channels (0-5 in this example) were recorded.
+- **Clock synchronization**: The `timestamp` field uses simple offset correction (`original_timestamp + clock_offset`). For improved accuracy, especially in longer recordings, consider using `linear_fit_offset` which accounts for clock drift.

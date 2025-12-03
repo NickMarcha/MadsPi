@@ -632,6 +632,88 @@ class LSLRecorder:
                 # Keep original sample if parsing fails
                 parsed_samples.append(sample)
         
+        # Calculate linear fit for clock offsets per stream (for improved synchronization accuracy)
+        # Group samples by stream to calculate per-stream linear fits
+        stream_offsets = {}  # {stream_name: [(time, offset), ...]}
+        for sample in parsed_samples:
+            stream_name = sample.get('stream_name')
+            if stream_name and sample.get('clock_offset') is not None:
+                measurement_time = sample.get('local_time_when_recorded')
+                if measurement_time is None:
+                    measurement_time = sample.get('timestamp')
+                if measurement_time is not None:
+                    if stream_name not in stream_offsets:
+                        stream_offsets[stream_name] = []
+                    stream_offsets[stream_name].append((measurement_time, sample.get('clock_offset')))
+        
+        # Calculate linear fit for each stream
+        stream_linear_fits = {}
+        try:
+            import numpy as np
+            for stream_name, offset_data in stream_offsets.items():
+                if len(offset_data) > 1:  # Need at least 2 points for linear fit
+                    times, offsets = zip(*offset_data)
+                    times = np.array(times)
+                    offsets = np.array(offsets)
+                    
+                    # Calculate linear fit: offset(t) = slope * t + intercept
+                    # Using numpy polyfit (degree 1 = linear)
+                    fit_coeffs = np.polyfit(times, offsets, 1)
+                    slope = float(fit_coeffs[0])
+                    intercept = float(fit_coeffs[1])
+                    
+                    # Calculate R-squared for fit quality
+                    fitted_offsets = slope * times + intercept
+                    ss_res = np.sum((offsets - fitted_offsets) ** 2)
+                    ss_tot = np.sum((offsets - np.mean(offsets)) ** 2)
+                    r_squared = float(1 - (ss_res / ss_tot)) if ss_tot > 0 else 0.0
+                    
+                    # Calculate standard error
+                    n = len(offsets)
+                    std_err = float(np.sqrt(ss_res / (n - 2))) if n > 2 else 0.0
+                    
+                    stream_linear_fits[stream_name] = {
+                        'slope': slope,  # Rate of clock drift (seconds per second)
+                        'intercept': intercept,  # Initial offset at t=0
+                        'r_squared': r_squared,  # Fit quality (0-1, higher is better)
+                        'std_err': std_err,  # Standard error of the fit
+                        'n_points': n,  # Number of offset measurements used
+                        'formula': f'offset(t) = {slope:.2e} * t + {intercept:.2e}'
+                    }
+                    logger.debug(f"Linear fit for {stream_name}: {stream_linear_fits[stream_name]['formula']}, R²={r_squared:.4f}")
+                elif len(offset_data) == 1:
+                    # Single point - can't calculate fit, but store the offset
+                    times, offsets = zip(*offset_data)
+                    stream_linear_fits[stream_name] = {
+                        'slope': 0.0,
+                        'intercept': float(offsets[0]),
+                        'r_squared': None,
+                        'std_err': None,
+                        'n_points': 1,
+                        'formula': f'offset(t) = {offsets[0]:.2e} (constant, single measurement)'
+                    }
+        except ImportError:
+            logger.warning("numpy not available, skipping linear fit calculation")
+        except Exception as e:
+            logger.warning(f"Error calculating linear fits: {e}", exc_info=True)
+        
+        # Add linear fit offset to each sample
+        for sample in parsed_samples:
+            stream_name = sample.get('stream_name')
+            if stream_name in stream_linear_fits:
+                fit = stream_linear_fits[stream_name]
+                measurement_time = sample.get('local_time_when_recorded')
+                if measurement_time is None:
+                    measurement_time = sample.get('timestamp')
+                
+                if measurement_time is not None and fit['n_points'] > 1:
+                    # Calculate offset from linear fit: offset(t) = slope * t + intercept
+                    linear_fit_offset = fit['slope'] * measurement_time + fit['intercept']
+                    sample['linear_fit_offset'] = linear_fit_offset
+                elif fit['n_points'] == 1:
+                    # Single measurement - use constant offset
+                    sample['linear_fit_offset'] = fit['intercept']
+        
         # Ensure stream_info is fully serializable (remove any remaining StreamInfo objects)
         serializable_stream_info = []
         for stream_info_item in self.stream_info:
@@ -656,6 +738,12 @@ class LSLRecorder:
                     except Exception as e:
                         logger.warning(f"Error converting StreamInfo to dict: {e}")
                         stream_info_copy['inlet_info'] = None
+            
+            # Add linear fit information to stream_info if available
+            stream_name = stream_info_copy.get('name')
+            if stream_name in stream_linear_fits:
+                stream_info_copy['clock_sync_linear_fit'] = stream_linear_fits[stream_name]
+            
             serializable_stream_info.append(stream_info_copy)
         
         output_data = {
@@ -671,7 +759,8 @@ class LSLRecorder:
                 'clock_offset_type': 'offset between local and remote device clocks (seconds)',
                 'timestamp_field': 'timestamp (synchronized to local time domain: original_timestamp + clock_offset)',
                 'original_timestamp_field': 'original_timestamp (device clock domain, for reference)',
-                'note': 'All timestamps in the "timestamp" field are synchronized and can be directly compared across devices. The "original_timestamp" field preserves the device clock time for reference. Clock offset is measured via inlet.time_correction() and applied manually (pyLSL Python bindings do not support postproc_flags).'
+                'linear_fit_available': len(stream_linear_fits) > 0,
+                'note': 'All timestamps in the "timestamp" field are synchronized and can be directly compared across devices. The "original_timestamp" field preserves the device clock time for reference. Clock offset is measured via inlet.time_correction() and applied manually (pyLSL Python bindings do not support postproc_flags). Linear fit parameters are calculated per stream and stored in stream_info["clock_sync_linear_fit"] for improved accuracy (accounts for clock drift). Each sample also includes "linear_fit_offset" field calculated from the linear fit.'
             }
         }
         
