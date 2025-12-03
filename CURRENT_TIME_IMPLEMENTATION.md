@@ -86,8 +86,10 @@ if LSL_AVAILABLE:
 ```python
 sync_event = {
     'type': 'video_recording_started',
-    'lsl_timestamp': self.lsl_start_time,  # When video recording began
-    'session_id': self.session_id,
+    'timestamp': self.lsl_start_time,  # When video recording began
+    'data': {
+        'session_id': self.session_id
+    },
     'wall_clock': datetime.now().isoformat()
 }
 ```
@@ -165,7 +167,6 @@ Bridge events have **nested timestamp fields** due to their JSON structure:
 
 ### Inner Level (Event Data)
 - `data.timestamp`: Original LSL timestamp from bridge event creation
-- `data.lsl_timestamp`: Duplicate of `data.timestamp` (in sync events)
 - `data.wall_clock`: Human-readable wall clock time
 
 **Example from Export**:
@@ -175,13 +176,12 @@ Bridge events have **nested timestamp fields** due to their JSON structure:
   "relative_time": 1.0035044000251219,    // Relative to session start
   "data": {
     "timestamp": 532142.4102643,          // When bridge event was created
-    "lsl_timestamp": 532142.4102643,     // Duplicate (in sync events)
     "wall_clock": "2025-11-24T12:51:41.821291"
   }
 }
 ```
 
-**Note**: For bridge events, `data.timestamp` and `data.lsl_timestamp` are **duplicates** - both contain the original event creation time. The outer `timestamp` is when the LSL recorder received it (slightly later).
+**Note**: The outer `timestamp` is when the LSL recorder received the event (slightly later than creation). The inner `data.timestamp` is when the bridge event was originally created.
 
 ---
 
@@ -271,21 +271,9 @@ CSV exports include:
 
 ---
 
-## Duplicate Timestamp Fields
+## Timestamp Field Relationships
 
-### 1. Bridge Events: `data.timestamp` vs `data.lsl_timestamp`
-
-**Location**: Bridge event `data` field
-
-**Duplicates**:
-- `data.timestamp`: Original event creation timestamp
-- `data.lsl_timestamp`: Same value (duplicate, used in sync events)
-
-**Reason**: Sync events (`video_recording_started`) include `lsl_timestamp` for clarity, but regular events only have `timestamp`.
-
-**Recommendation**: Use `data.timestamp` for consistency. `data.lsl_timestamp` is redundant.
-
-### 2. Outer `timestamp` vs Inner `data.timestamp` (Bridge Events)
+### Outer `timestamp` vs Inner `data.timestamp` (Bridge Events)
 
 **Not duplicates** - different meanings:
 - **Outer `timestamp`**: When LSL recorder received the event (slightly later)
@@ -397,8 +385,8 @@ All `timestamp` fields (after synchronization) are in the **same time domain**:
    - Video alignment via `video_lsl_offset`
    - Timeline based on session-relative time (0 to duration)
 
-4. **Duplicates**:
-   - Bridge events have `data.timestamp` and `data.lsl_timestamp` (use `data.timestamp`)
+4. **Timestamp Relationships**:
+   - Bridge events use `data.timestamp` for event creation time
    - Outer and inner timestamps differ slightly (outer = received time, inner = creation time)
 
 5. **Time Domains**:

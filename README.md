@@ -236,7 +236,7 @@ synchronized_timestamp = timestamp + clock_offset  # Synchronized to local time 
 ### Solution
 Screen recorder sends a **`video_recording_started` sync event** containing:
 - `type`: `'video_recording_started'`
-- `lsl_timestamp`: LSL clock time when video recording began
+- `timestamp`: LSL clock time when video recording began (in event data)
 - `session_id`, `wall_clock`: Additional metadata
 
 ### Using the Sync Event
@@ -249,13 +249,16 @@ def find_sync_event(events):
             return event
 
 sync_event = find_sync_event(recorded_events)
-video_offset = sync_event['lsl_timestamp']  # e.g., 9.8 seconds
+# Get timestamp from event data (bridge events store timestamp in data.timestamp)
+video_offset = sync_event.get('data', {}).get('timestamp') or sync_event.get('timestamp')  # e.g., 9.8 seconds
 ```
 
 **Align events to video:**
 ```python
 # Convert LSL timestamp to video playback time
-video_time = event['lsl_timestamp'] - video_offset
+# Use relative_time from the sync event sample, or calculate from timestamp
+video_offset = sync_event_sample.get('relative_time')  # Time when video started (relative to session)
+video_time = event_sample.get('relative_time') - video_offset
 
 if video_time < 0:
     print(f"Event occurred {abs(video_time):.2f}s BEFORE video started")
@@ -368,7 +371,7 @@ tracking_data/{project_id}/sessions/{session_id}/
 |-------|----------|
 | **Timestamp misalignment** | Check sync event in LSL JSON; verify `video_recording_started` sent; see "Video & Event Timestamp Synchronization" section |
 | **LSL streams not appearing** | Run LSL Manager dialog ("Refresh Streams"); verify device connected/powered |
-| **Video doesn't align with events** | Verify sync marker in JSON; calculate offset: `video_time = event_timestamp - sync_event['lsl_timestamp']` |
+| **Video doesn't align with events** | Verify sync marker in JSON; calculate offset: `video_time = event_relative_time - sync_event_relative_time` |
 | **HTML bridge not firing** | Confirm `madsBridge.js` loaded; check browser console for errors |
 | **Project won't load** | Verify JSON structure; check `Project.from_dict()` in project_manager.py |
 
