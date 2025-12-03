@@ -253,6 +253,52 @@ Bridge events have **multiple timestamps** because they pass through multiple st
 
 ---
 
+## CSV Export Format
+
+**CSV export is a flattened version of the JSON data** with the following flattening rules:
+
+### Top-Level Fields
+All top-level fields from JSON samples become CSV columns directly:
+- `timestamp`, `original_timestamp`, `relative_time`
+- `stream_name`, `stream_type`
+- `clock_offset`, `local_time_when_recorded`, `linear_fit_offset`
+- `session_id`, `session_name` (added during export)
+
+### Data Field Flattening
+
+**For Numeric Arrays (EmotiBit, Mouse Tracking, etc.):**
+- **1 value**: Stored in `data_value` column
+- **2 values**: Stored in `data_x`, `data_y` columns
+- **3 values**: Stored in `data_x`, `data_y`, `data_z` columns
+- **4+ values**: Stored as JSON string in `data_array` column
+  - Example: EmotiBit with 6 channels → `data_array` = `"[1.497, 39.017, 37.892, 170016.0, 154335.0, 13511.0]"`
+
+**For Bridge Events (Nested JSON):**
+- Top-level event fields: `event_type`, `wall_clock`
+- Nested `data` object: Flattened with `data_` prefix
+  - Example: `data.answer` → `data_answer` column
+  - Example: `data.data.timestamp` → `data_data_timestamp` column
+- Recursively nested objects: Flattened with underscore separators
+  - Example: `data.data.question` → `data_data_question` column
+
+### Example CSV Row (EmotiBit)
+
+```csv
+session_id,session_name,timestamp,original_timestamp,relative_time,stream_name,stream_type,clock_offset,local_time_when_recorded,linear_fit_offset,data_array
+20251203_160333_696341,final4,17358.0383437,17358.0383523,4.573580899999797,EmotiBit_BrainFlow,EmotiBit,-8.600000001024455e-06,17358.0447723,-9.64693489451606e-06,"[1.496664047241211, 39.016998291015625, 37.891998291015625, 170016.0, 154335.0, 13511.0]"
+```
+
+### Example CSV Row (Bridge Event)
+
+```csv
+session_id,session_name,timestamp,original_timestamp,relative_time,stream_name,stream_type,clock_offset,local_time_when_recorded,linear_fit_offset,event_type,wall_clock,data_answer,data_answer_label,data_question,data_data_timestamp,data_timestamp
+20251203_160333_696341,final4,17358.0124364,17358.01246,4.547673600001872,MadsPipeline_BridgeEvents,Markers,-2.3599999622092582e-05,17358.0251037,-4.199365856685745e-06,radio_selected,2025-12-03T16:03:41.437712,good,"Good - I can usually maintain focus, but sometimes get distracted",focus_ability,1764774221437,17358.0123682
+```
+
+**Note**: For multi-channel numeric data (like EmotiBit with 6 channels), the array is stored as a JSON string in the `data_array` column. You can parse this in your analysis tool (e.g., `json.loads()` in Python, `JSON.parse()` in JavaScript) to access individual channel values.
+
+---
+
 ## Notes
 
 - **`original_timestamp`**: Present in exports from **November 2025 onwards** (after synchronization implementation). Older exports won't have this field.
@@ -262,3 +308,4 @@ Bridge events have **multiple timestamps** because they pass through multiple st
 - **Data vs Raw Data**: For numeric streams they're identical; for markers, `data` is parsed JSON and `raw_data` is the original string.
 - **No recording fault**: If you see 6 channels in the data and 6 in channel_labels (but 15 in original_channel_count), this is normal - it means channel filtering was applied during recording. Only the selected channels (0-5 in this example) were recorded. The other 9 channels (motion sensors) are available but were not selected for recording.
 - **Clock synchronization**: The `timestamp` field uses simple offset correction (`original_timestamp + clock_offset`). For improved accuracy, especially in longer recordings, consider using `linear_fit_offset` which accounts for clock drift.
+- **CSV format**: CSV export is a flattened version of JSON. Multi-channel numeric data (4+ channels) is stored as a JSON string in `data_array` column for easy parsing in analysis tools.
