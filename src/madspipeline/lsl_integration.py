@@ -506,6 +506,7 @@ class LSLRecorder:
                                 stream_info_copy['inlet_info'] = None
                     
                     # Include channel_labels in the stream_info for easy access
+                    # Note: synchronization_applied removed - check session-level synchronization_info instead
                     recorded_sample = {
                         'timestamp': synchronized_timestamp,  # Synchronized to local time domain (for direct comparison)
                         'original_timestamp': original_timestamp,  # Original device timestamp (for reference)
@@ -517,7 +518,6 @@ class LSLRecorder:
                         'recorded_at': datetime.now().isoformat(),
                         'clock_offset': clock_offset,  # Clock offset measurement (for post-hoc analysis)
                         'local_time_when_recorded': local_clock(),  # Reference for offset measurement timing
-                        'synchronization_applied': True,  # Flag indicating timestamps are synchronized
                         'original_channel_count': len(sample),  # Store original count for reference
                         'filtered_channel_indices': channel_filter if channel_filter else None  # Store which channels were selected
                     }
@@ -576,6 +576,7 @@ class LSLRecorder:
                     if isinstance(data_item, str):
                         try:
                             parsed_data = json.loads(data_item)
+                            # Note: synchronization_applied removed - check session-level synchronization_info instead
                             parsed_samples.append({
                                 'timestamp': sample.get('timestamp'),  # Synchronized timestamp
                                 'original_timestamp': sample.get('original_timestamp'),  # Original device timestamp
@@ -585,11 +586,11 @@ class LSLRecorder:
                                 'data': parsed_data,
                                 'raw_data': sample['data'],
                                 'clock_offset': sample.get('clock_offset'),  # Clock offset measurement
-                                'local_time_when_recorded': sample.get('local_time_when_recorded'),  # Timing reference
-                                'synchronization_applied': sample.get('synchronization_applied', False)  # Sync flag
+                                'local_time_when_recorded': sample.get('local_time_when_recorded')  # Timing reference
                             })
                         except json.JSONDecodeError:
                             # Not JSON, keep as raw
+                            # Note: synchronization_applied removed - check session-level synchronization_info instead
                             parsed_samples.append({
                                 'timestamp': sample.get('timestamp'),  # Synchronized timestamp
                                 'original_timestamp': sample.get('original_timestamp'),  # Original device timestamp
@@ -599,11 +600,11 @@ class LSLRecorder:
                                 'data': sample['data'],
                                 'raw_data': sample['data'],
                                 'clock_offset': sample.get('clock_offset'),  # Clock offset measurement
-                                'local_time_when_recorded': sample.get('local_time_when_recorded'),  # Timing reference
-                                'synchronization_applied': sample.get('synchronization_applied', False)  # Sync flag
+                                'local_time_when_recorded': sample.get('local_time_when_recorded')  # Timing reference
                             })
                     else:
                         # Numeric data (mouse tracking, etc.)
+                        # Note: synchronization_applied removed - check session-level synchronization_info instead
                         parsed_samples.append({
                             'timestamp': sample.get('timestamp'),  # Synchronized timestamp
                             'original_timestamp': sample.get('original_timestamp'),  # Original device timestamp
@@ -613,10 +614,10 @@ class LSLRecorder:
                             'data': sample['data'],
                             'raw_data': sample['data'],
                             'clock_offset': sample.get('clock_offset'),  # Clock offset measurement
-                            'local_time_when_recorded': sample.get('local_time_when_recorded'),  # Timing reference
-                            'synchronization_applied': sample.get('synchronization_applied', False)  # Sync flag
+                            'local_time_when_recorded': sample.get('local_time_when_recorded')  # Timing reference
                         })
                 else:
+                    # Note: synchronization_applied removed - check session-level synchronization_info instead
                     parsed_samples.append({
                         'timestamp': sample.get('timestamp'),  # Synchronized timestamp
                         'original_timestamp': sample.get('original_timestamp'),  # Original device timestamp
@@ -625,8 +626,7 @@ class LSLRecorder:
                         'stream_type': sample.get('stream_info', {}).get('type', 'unknown'),
                         'data': sample['data'],
                         'clock_offset': sample.get('clock_offset'),  # Clock offset measurement
-                        'local_time_when_recorded': sample.get('local_time_when_recorded'),  # Timing reference
-                        'synchronization_applied': sample.get('synchronization_applied', False)  # Sync flag
+                        'local_time_when_recorded': sample.get('local_time_when_recorded')  # Timing reference
                     })
             except Exception as e:
                 # Keep original sample if parsing fails
