@@ -4,31 +4,30 @@ Single data entry explanation
 
 ```json
 {
-    "timestamp": 16175.973816900001,                  // Synchronized LSL timestamp (for cross-device comparison)
-    "original_timestamp": 16175.9738342,              // Original device timestamp (before synchronization)
-    "relative_time": 4.817392800001471,               // Time since recording started (seconds from session_start_time)
+    "timestamp": 17358.0383437,                       // Synchronized LSL timestamp (for cross-device comparison)
+    "original_timestamp": 17358.0383523,             // Original device timestamp (before synchronization)
+    "relative_time": 4.573580899999797,              // Time since recording started (seconds from session_start_time)
     "stream_name": "EmotiBit_BrainFlow",
     "stream_type": "EmotiBit",
     "data": [                                         // Filtered data array (only selected channels)
-        1.6680669784545898,                           // data[0] = Humidity (H0) - in percent (0-100)
-        38.854000091552734,                           // data[1] = Temperature (T1) - in degrees Celsius
-        37.75299835205078,                            // data[2] = EDA (EA) - in microsiemens
-        167788.0,                                     // data[3] = PPG_IR (PI) - Raw ADC values
-        154754.0,                                     // data[4] = PPG_Red (PR) - Raw ADC values
-        13491.0                                       // data[5] = PPG_Green (PG) - Raw ADC values
+        1.496664047241211,                            // data[0] = EDA (EA) - in microsiemens
+        39.016998291015625,                           // data[1] = Temperature (T1) - in degrees Celsius
+        37.891998291015625,                           // data[2] = Temperature2 (T2) - in degrees Celsius (second temperature sensor)
+        170016.0,                                     // data[3] = PPG_IR (PI) - Raw ADC values
+        154335.0,                                     // data[4] = PPG_Red (PR) - Raw ADC values
+        13511.0                                       // data[5] = PPG_Green (PG) - Raw ADC values
     ],
     "raw_data": [                                     // Raw data array (same as data for numeric streams)
-        1.6680669784545898,
-        38.854000091552734,
-        37.75299835205078,
-        167788.0,
-        154754.0,
-        13491.0
+        1.496664047241211,
+        39.016998291015625,
+        37.891998291015625,
+        170016.0,
+        154335.0,
+        13511.0
     ],
-    "clock_offset": -1.7299999854003545e-05,          // LSL clock offset measurement (device clock - local clock) at this moment
-    "local_time_when_recorded": 16175.9767847,        // Local LSL time when clock offset was measured
-    "linear_fit_offset": -3.011582311383712e-06,     // Clock offset calculated from linear fit (accounts for clock drift, more accurate)
-    "synchronization_applied": true                   // Flag indicating timestamp synchronization is active
+    "clock_offset": -8.600000001024455e-06,          // LSL clock offset measurement (device clock - local clock) at this moment
+    "local_time_when_recorded": 17358.0447723,       // Local LSL time when clock offset was measured
+    "linear_fit_offset": -9.64693489451606e-06,     // Clock offset calculated from linear fit (accounts for clock drift, more accurate)
 }
 ```
 
@@ -76,24 +75,26 @@ Single data entry explanation
 - **AUXILIARY_PRESET**: PPG (IR, Red, Green)
 - **DEFAULT_PRESET**: Motion sensors (Accelerometer, Gyroscope, Magnetometer)
 
-**Temperature (T1)**:
-- **Units**: degrees Celsius
-- **Expected range**: ~30-40°C (body temperature range)
-- **Example value**: `38.854` = 38.85°C (normal body temperature)
-- **Note**: There are two temperature sensors: `T1` (Temperature1 from MAX30101) and `TH` (Thermopile, medical-grade, only on EmotiBit MD). The oscilloscope may show both as separate lines.
-
-**Humidity (H0)**:
-- **Units**: percent (0-100)
-- **Expected range**: 0-100%
-- **Example value**: `1.668` = 1.67% (low humidity, typical for indoor environments)
-- **Important**: `H0` (Humidity) is **NOT** the same as `HR` (Heart Rate). They are separate channels.
-- Heart Rate (`HR`) is a separate channel that may not be included in the default channel set
-
 **EDA (EA - Electrodermal Activity)**:
 - **Units**: microsiemens
 - **Expected range**: Typically 0.1-100 microsiemens (varies by individual and activity)
-- **Example value**: `37.753` = 37.75 microsiemens (reasonable value for EDA)
+- **Example value**: `1.497` = 1.50 microsiemens (reasonable value for EDA)
 - **Note**: EDA values can vary significantly based on emotional state, stress, and physical activity
+- **Channel**: data[0] (first channel from ANCILLARY_PRESET)
+
+**Temperature (T1)**:
+- **Units**: degrees Celsius
+- **Expected range**: ~30-40°C (body temperature range)
+- **Example value**: `39.017` = 39.02°C (normal body temperature)
+- **Channel**: data[1] (second channel from ANCILLARY_PRESET)
+- **Note**: This is the primary temperature sensor (T1 from MAX30101)
+
+**Temperature2 (T2)**:
+- **Units**: degrees Celsius
+- **Expected range**: ~30-40°C (body temperature range)
+- **Example value**: `37.892` = 37.89°C (second temperature reading)
+- **Channel**: data[2] (third channel from ANCILLARY_PRESET)
+- **Note**: This may be a second temperature sensor reading. Some EmotiBit devices have `TH` (Thermopile, medical-grade, only on EmotiBit MD) as a separate sensor.
 
 **PPG Channels (PI, PR, PG)**:
 - **Units**: Raw ADC values
@@ -129,17 +130,17 @@ The implementation correctly reads from all three presets:
     "channel_count": 6,                               // Number of channels actually recorded
     "original_channel_count": 15,                     // Total channels available in the stream
     "channel_labels": {                                // Only labels for RECORDED channels
-        "0": "Humidity",                               // Maps to data[0] - from ANCILLARY_PRESET
-        "1": "Temperature",                           // Maps to data[1] - from ANCILLARY_PRESET
-        "2": "EDA",                                    // Maps to data[2] - from ANCILLARY_PRESET
-        "3": "PPG_IR",                                 // Maps to data[3] - from AUXILIARY_PRESET
-        "4": "PPG_Red",                                // Maps to data[4] - from AUXILIARY_PRESET
-        "5": "PPG_Green"                               // Maps to data[5] - from AUXILIARY_PRESET
+        "0": "EDA",                                    // Maps to data[0] - from ANCILLARY_PRESET channel 1
+        "1": "Temperature",                           // Maps to data[1] - from ANCILLARY_PRESET channel 2
+        "2": "Temperature2",                          // Maps to data[2] - from ANCILLARY_PRESET channel 3
+        "3": "PPG_IR",                                 // Maps to data[3] - from AUXILIARY_PRESET channel 1
+        "4": "PPG_Red",                                // Maps to data[4] - from AUXILIARY_PRESET channel 2
+        "5": "PPG_Green"                               // Maps to data[5] - from AUXILIARY_PRESET channel 3
     },
     "filtered_channel_indices": [                     // Original channel indices that were recorded
-        0,                                             // data[0] came from original channel 0 (Humidity)
+        0,                                             // data[0] came from original channel 0 (EDA)
         1,                                             // data[1] came from original channel 1 (Temperature)
-        2,                                             // data[2] came from original channel 2 (EDA)
+        2,                                             // data[2] came from original channel 2 (Temperature2)
         3,                                             // data[3] came from original channel 3 (PPG_IR)
         4,                                             // data[4] came from original channel 4 (PPG_Red)
         5                                              // data[5] came from original channel 5 (PPG_Green)
@@ -150,7 +151,7 @@ The implementation correctly reads from all three presets:
 **Understanding Channel Filtering:**
 
 1. **Stream has 15 channels total** (`original_channel_count: 15`):
-   - Original channels 0-2: Humidity, Temperature, EDA (from ANCILLARY_PRESET)
+   - Original channels 0-2: EDA, Temperature, Temperature2 (from ANCILLARY_PRESET)
    - Original channels 3-5: PPG_IR, PPG_Red, PPG_Green (from AUXILIARY_PRESET)
    - Original channels 6-14: Accel_X, Accel_Y, Accel_Z, Gyro_X, Gyro_Y, Gyro_Z, Mag_X, Mag_Y, Mag_Z (from DEFAULT_PRESET)
 
@@ -160,12 +161,12 @@ The implementation correctly reads from all three presets:
    - `filtered_channel_indices` shows which original channels were recorded: [0, 1, 2, 3, 4, 5]
 
 3. **Direct Mapping:**
-   - `data[0]` = `channel_labels["0"]` = "Humidity" (from original channel 0, ANCILLARY_PRESET)
-   - `data[1]` = `channel_labels["1"]` = "Temperature" (from original channel 1, ANCILLARY_PRESET)
-   - `data[2]` = `channel_labels["2"]` = "EDA" (from original channel 2, ANCILLARY_PRESET)
-   - `data[3]` = `channel_labels["3"]` = "PPG_IR" (from original channel 3, AUXILIARY_PRESET)
-   - `data[4]` = `channel_labels["4"]` = "PPG_Red" (from original channel 4, AUXILIARY_PRESET)
-   - `data[5]` = `channel_labels["5"]` = "PPG_Green" (from original channel 5, AUXILIARY_PRESET)
+   - `data[0]` = `channel_labels["0"]` = "EDA" (from original channel 0, ANCILLARY_PRESET channel 1)
+   - `data[1]` = `channel_labels["1"]` = "Temperature" (from original channel 1, ANCILLARY_PRESET channel 2)
+   - `data[2]` = `channel_labels["2"]` = "Temperature2" (from original channel 2, ANCILLARY_PRESET channel 3)
+   - `data[3]` = `channel_labels["3"]` = "PPG_IR" (from original channel 3, AUXILIARY_PRESET channel 1)
+   - `data[4]` = `channel_labels["4"]` = "PPG_Red" (from original channel 4, AUXILIARY_PRESET channel 2)
+   - `data[5]` = `channel_labels["5"]` = "PPG_Green" (from original channel 5, AUXILIARY_PRESET channel 3)
 
 4. **Channels 6-14 are NOT in the data array** because they were filtered out during recording (motion sensors: accelerometer, gyroscope, magnetometer).
 
@@ -193,25 +194,28 @@ The implementation correctly reads from all three presets:
 
 ```json
 {
-    "timestamp": 11485.00389485,                     // When LSL recorder RECEIVED the event (slightly later)
-    "original_timestamp": 11485.0038996,              // Original timestamp (before synchronization)
-    "relative_time": 91.6285260500008,               // Time since recording started
+    "timestamp": 17358.0124364,                      // When LSL recorder RECEIVED the event (slightly later)
+    "original_timestamp": 17358.01246,               // Original timestamp (before synchronization)
+    "relative_time": 4.547673600001872,              // Time since recording started
     "stream_name": "MadsPipeline_BridgeEvents",
     "stream_type": "Markers",
     "data": {                                        // Parsed JSON object (structured)
         "data": {
-            "step": 4,
-            "timestamp": 1764768348428               // JavaScript timestamp (milliseconds since epoch)
+            "answer": "good",
+            "answer_label": "Good - I can usually maintain focus, but sometimes get distracted",
+            "question": "focus_ability",
+            "timestamp": 1764774221437               // JavaScript timestamp (milliseconds since epoch)
         },
-        "timestamp": 11485.0037656,                  // When bridge event was CREATED (original LSL time)
-        "type": "step_change",
-        "wall_clock": "2025-12-03T14:25:48.428496"  // Human-readable wall clock time
+        "timestamp": 17358.0123682,                  // When bridge event was CREATED (original LSL time)
+        "type": "radio_selected",
+        "wall_clock": "2025-12-03T16:03:41.437712"  // Human-readable wall clock time
     },
     "raw_data": [                                    // Original string (for reference)
-        "{\"data\": {\"step\": 4, \"timestamp\": 1764768348428}, \"timestamp\": 11485.0037656, \"type\": \"step_change\", \"wall_clock\": \"2025-12-03T14:25:48.428496\"}"
+        "{\"data\": {\"answer\": \"good\", \"answer_label\": \"Good - I can usually maintain focus, but sometimes get distracted\", \"question\": \"focus_ability\", \"timestamp\": 1764774221437}, \"timestamp\": 17358.0123682, \"type\": \"radio_selected\", \"wall_clock\": \"2025-12-03T16:03:41.437712\"}"
     ],
-    "clock_offset": -4.749999789055437e-06,          // Clock offset (usually small for local events)
-    "local_time_when_recorded": 11485.0159727,       // When offset was measured
+    "clock_offset": -2.3599999622092582e-05,        // Clock offset (usually small for local events)
+    "local_time_when_recorded": 17358.0251037,      // When offset was measured
+    "linear_fit_offset": -4.199365856685745e-06,    // Clock offset calculated from linear fit (accounts for clock drift, more accurate)
     "synchronization_applied": true                   // Flag indicating timestamp synchronization is active
 }
 ```
@@ -220,22 +224,22 @@ The implementation correctly reads from all three presets:
 
 Bridge events have **multiple timestamps** because they pass through multiple stages:
 
-1. **Outer `timestamp`** (532149.0113554): 
+1. **Outer `timestamp`** (17358.0124364): 
    - When the LSL recorder **received** the event
    - Slightly later than creation (processing delay)
    - Use this for chronological ordering with other LSL streams
 
-2. **Inner `data.timestamp`** (532149.0112505):
+2. **Inner `data.timestamp`** (17358.0123682):
    - When the bridge event was **originally created** (in JavaScript/Python)
    - More accurate for event-specific timing (e.g., when user clicked)
-   - Difference from outer timestamp: ~0.1ms (processing delay)
+   - Difference from outer timestamp: ~0.07ms (processing delay)
 
-3. **Inner `data.data.timestamp`** (1763985108421):
+3. **Inner `data.data.timestamp`** (1764774221437):
    - JavaScript timestamp in **milliseconds** (different time domain!)
    - From the web page/JavaScript side
    - Not synchronized with LSL time - use for reference only
 
-4. **`data.wall_clock`** ("2025-11-24T12:51:48.422236"):
+4. **`data.wall_clock`** ("2025-12-03T16:03:41.437712"):
    - Human-readable wall clock time
    - For reference/debugging only
 
