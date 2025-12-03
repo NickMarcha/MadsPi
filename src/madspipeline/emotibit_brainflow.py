@@ -102,12 +102,23 @@ class EmotiBitBrainflowStreamer:
         import logging
         logger = logging.getLogger(__name__)
         
+        # Enable BrainFlow's board logger for detailed connection diagnostics
+        # This will show what IPs are being tried and connection attempts
+        try:
+            BoardShim.enable_dev_board_logger()
+            logger.debug("Enabled BrainFlow board logger for connection diagnostics")
+        except Exception as e:
+            logger.debug(f"Could not enable board logger: {e}")
+        
         params = BrainFlowInputParams()
         if self.ip_address:
             params.ip_address = self.ip_address
             logger.info(f"Using specified IP address: {self.ip_address}")
+            # Note: If this is a broadcast address (e.g., .254, .255), it won't work
+            # The device needs its actual IP address (e.g., 10.10.10.10)
         else:
             logger.info("No IP address specified, using auto-discovery (this may take 15-30 seconds)")
+            logger.info("Auto-discovery will try multiple broadcast addresses on your network")
             # Increase timeout for auto-discovery (default is often too short)
             # BrainFlow uses timeout in seconds, 0 means default, but we'll try to set a longer one
             try:
@@ -116,6 +127,9 @@ class EmotiBitBrainflowStreamer:
             except AttributeError:
                 # Some BrainFlow versions may not support timeout parameter
                 logger.debug("Timeout parameter not available in this BrainFlow version")
+        
+        # Note: BrainFlow doesn't expose many other connection parameters for EmotiBit
+        # The main settings are ip_address and timeout
 
         board_id = BoardIds.EMOTIBIT_BOARD.value
         board = BoardShim(board_id, params)
@@ -172,6 +186,19 @@ class EmotiBitBrainflowStreamer:
                 )
                 if not self.ip_address:
                     logger.info("RECOMMENDATION: Try specifying the device IP address (e.g., 10.10.10.10) in LSL Manager")
+                    logger.info("HOW TO FIND DEVICE IP:")
+                    logger.info("  - Check EmotiBit Oscilloscope: The device IP is shown when connected")
+                    logger.info("  - Use Arduino Serial Monitor: Press 'i' to print device info with IP address")
+                    logger.info("  - Check your router's connected devices list")
+                    logger.info("  - The IP should be in the 10.10.10.x range (NOT .254 or .255 - those are broadcast addresses)")
+                else:
+                    logger.warning(f"WARNING: The IP address '{self.ip_address}' might not be correct.")
+                    logger.warning("  - .254 and .255 are typically broadcast/gateway addresses, not device IPs")
+                    logger.warning("  - Device IPs are usually in the range 10.10.10.1-253")
+                    logger.info("HOW TO FIND CORRECT DEVICE IP:")
+                    logger.info("  - Check EmotiBit Oscilloscope: The device IP is shown when connected")
+                    logger.info("  - Use Arduino Serial Monitor: Press 'i' to print device info with IP address")
+                    logger.info("  - Check your router's connected devices list")
                 
                 # Set stop event and return - don't raise exception to avoid crash
                 self._stop_event.set()
@@ -403,12 +430,32 @@ class EmotiBitBrainflowStreamer:
                     logger.info("  - Device is on a different subnet")
                     logger.info("  - Network has multiple interfaces (WiFi + Ethernet)")
                     logger.info("  - Firewall is blocking UDP broadcasts")
+                    logger.info("HOW TO FIND DEVICE IP:")
+                    logger.info("  - Check EmotiBit Oscilloscope: The device IP is shown when connected")
+                    logger.info("  - Use Arduino Serial Monitor: Press 'i' to print device info with IP address")
+                    logger.info("  - Check your router's connected devices list")
+                else:
+                    logger.warning(f"WARNING: The IP address '{self.ip_address}' might not be correct.")
+                    logger.warning("  - .254 and .255 are typically broadcast/gateway addresses, not device IPs")
+                    logger.warning("  - Device IPs are usually in the range 10.10.10.1-253")
+                    logger.info("HOW TO FIND CORRECT DEVICE IP:")
+                    logger.info("  - Check EmotiBit Oscilloscope: The device IP is shown when connected")
+                    logger.info("  - Use Arduino Serial Monitor: Press 'i' to print device info with IP address")
+                    logger.info("  - Check your router's connected devices list")
                     logger.info("  → Try specifying the device IP address (e.g., 10.10.10.10) in LSL Manager")
             elif "timeout" in error_msg.lower():
                 logger.error(
                     "Connection timeout. The EmotiBit device may not be reachable. "
                     "Try specifying the IP address directly."
                 )
+                if self.ip_address:
+                    logger.warning(f"WARNING: The IP address '{self.ip_address}' might not be correct.")
+                    logger.warning("  - .254 and .255 are typically broadcast/gateway addresses, not device IPs")
+                    logger.warning("  - Device IPs are usually in the range 10.10.10.1-253")
+                logger.info("HOW TO FIND DEVICE IP:")
+                logger.info("  - Check EmotiBit Oscilloscope: The device IP is shown when connected")
+                logger.info("  - Use Arduino Serial Monitor: Press 'i' to print device info with IP address")
+                logger.info("  - Check your router's connected devices list")
             
             # ensure resources are released on error
             try:

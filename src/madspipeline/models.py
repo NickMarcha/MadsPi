@@ -41,7 +41,7 @@ class VideoConfig:
 class ScreenRecordingConfig:
     """Configuration for screen recording projects."""
     recording_quality: str = "high"  # low, medium, high
-    fps: int = 30
+    fps: int = 15  # Default frame rate for screen recording
     resolution: Optional[tuple[int, int]] = None  # None for fullscreen
     include_audio: bool = False
     mouse_tracking: bool = True
@@ -231,7 +231,7 @@ class Project:
             config = config_data['screen_recording']
             screen_recording_config = ScreenRecordingConfig(
                 recording_quality=config.get('recording_quality', 'high'),
-                fps=config.get('fps', 30),
+                fps=config.get('fps', 15),
                 resolution=config.get('resolution'),
                 include_audio=config.get('include_audio', False),
                 mouse_tracking=config.get('mouse_tracking', True)

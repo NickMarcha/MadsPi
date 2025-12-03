@@ -57,9 +57,9 @@ class ScreenRecorder:
             on_recording_started: Optional callback to invoke when recording starts.
                                   Will be called with sync event data containing:
                                   - type: 'video_recording_started'
-                                  - lsl_timestamp: LSL synchronized timestamp
+                                  - timestamp: LSL synchronized timestamp
                                   - wall_clock: ISO format wall clock time
-                                  - session_id: Session ID
+                                  - data.session_id: Session ID
         """
         if not RECORDING_AVAILABLE:
             raise RuntimeError(f"Screen recording dependencies not available: {IMPORT_ERROR}")
@@ -243,7 +243,6 @@ class ScreenRecorder:
             # Primary event (immediate)
             sync_event = {
                 'data': {
-                    'lsl_timestamp': self.lsl_start_time if (LSL_AVAILABLE and self.lsl_start_time is not None) else None,
                     'session_id': self.session_id
                 },
                 'timestamp': self.lsl_start_time if (LSL_AVAILABLE and self.lsl_start_time is not None) else datetime.now().timestamp(),
@@ -546,7 +545,6 @@ class ScreenRecorder:
 
                     end_event = {
                         'data': {
-                            'lsl_timestamp': lsl_ts,
                             'session_id': self.session_id
                         },
                         'timestamp': lsl_ts if lsl_ts is not None else datetime.now().timestamp(),

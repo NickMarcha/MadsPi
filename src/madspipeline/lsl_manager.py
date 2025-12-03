@@ -243,7 +243,16 @@ class LSLStreamManagerDialog(QDialog):
         ip_layout = QHBoxLayout()
         ip_layout.addWidget(QLabel("IP Address (optional):"))
         self.brainflow_ip_edit = QLineEdit()
-        self.brainflow_ip_edit.setPlaceholderText("Leave empty for auto-discovery (e.g. 192.168.0.255)")
+        self.brainflow_ip_edit.setPlaceholderText("Leave empty for auto-discovery (e.g. 10.10.10.10)")
+        self.brainflow_ip_edit.setToolTip(
+            "Enter the EmotiBit device IP address.\n"
+            "Leave empty to use auto-discovery (may take 15-30 seconds).\n\n"
+            "How to find the device IP:\n"
+            "• Check EmotiBit Oscilloscope when connected\n"
+            "• Use Arduino Serial Monitor: Press 'i' to print device info\n"
+            "• Check your router's connected devices list\n\n"
+            "Note: Use the actual device IP (e.g., 10.10.10.10), NOT broadcast addresses (.254, .255)"
+        )
         if getattr(self.current_config, 'brainflow_ip', None):
             self.brainflow_ip_edit.setText(self.current_config.brainflow_ip)
         self.brainflow_ip_edit.textChanged.connect(self._on_config_changed)
@@ -1050,15 +1059,30 @@ class LSLStreamManagerDialog(QDialog):
             QTimer.singleShot(5000, self._check_brainflow_status)  # Second check at 5s
             QTimer.singleShot(8000, self._check_brainflow_status)  # Final check at 8s
             
-            QMessageBox.information(
-                self, 
-                "BrainFlow", 
+            message = (
                 "Started BrainFlow EmotiBit streamer.\n\n"
                 "Note: If the EmotiBit device is already in use by another program "
                 "(like EmotiBit Oscilloscope), the connection may fail. "
                 "Please close other programs using the device first.\n\n"
-                "The stream should appear in available streams once connected."
             )
+            if not ip:
+                message += (
+                    "Using auto-discovery (may take 15-30 seconds).\n"
+                    "If this fails, try specifying the device IP address.\n\n"
+                    "How to find device IP:\n"
+                    "• Check EmotiBit Oscilloscope when connected\n"
+                    "• Use Arduino Serial Monitor: Press 'i' to print device info\n"
+                    "• Check your router's connected devices list\n\n"
+                )
+            else:
+                message += (
+                    f"Using IP address: {ip}\n"
+                    "If connection fails, verify this is the correct device IP.\n"
+                    "Note: .254 and .255 are typically broadcast addresses, not device IPs.\n\n"
+                )
+            message += "The stream should appear in available streams once connected."
+            
+            QMessageBox.information(self, "BrainFlow", message)
         except Exception as e:
             logger.error(f"Failed to start BrainFlow streamer: {e}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Failed to start BrainFlow streamer: {e}")

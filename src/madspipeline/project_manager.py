@@ -152,7 +152,7 @@ class ProjectManager:
             from .models import ScreenRecordingConfig
             screen_recording_config = ScreenRecordingConfig(
                 recording_quality=config.get('recording_quality', 'high') if config else 'high',
-                fps=config.get('fps', 30) if config else 30,
+                fps=config.get('fps', 15) if config else 15,
                 resolution=config.get('resolution') if config else None,
                 include_audio=config.get('include_audio', False) if config else False,
                 mouse_tracking=config.get('mouse_tracking', True) if config else True
@@ -644,7 +644,7 @@ class ProjectManager:
                 
                 # Add any other top-level keys from data (excluding already handled ones)
                 for key, value in data.items():
-                    if key not in ['type', 'data', 'wall_clock', 'timestamp', 'lsl_timestamp']:
+                    if key not in ['type', 'data', 'wall_clock', 'timestamp']:
                         # Flatten if it's a dict, otherwise add directly
                         if isinstance(value, dict):
                             flattened_value = self._flatten_dict(value, prefix=f'{key}_')

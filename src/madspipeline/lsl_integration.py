@@ -303,7 +303,7 @@ class LSLRecorder:
                     inlet_info = None
                 
                 # Extract channel labels from metadata for easy access
-                channel_labels = {}
+                all_channel_labels = {}
                 try:
                     if inlet_info:
                         logger.debug(f"Extracting channel labels for {stream_name}")
@@ -318,16 +318,16 @@ class LSLRecorder:
                                 while ch and i < max_channels:
                                     try:
                                         label = ch.child_value("label") or f"Channel {i}"
-                                        channel_labels[i] = label
+                                        all_channel_labels[i] = label
                                     except Exception as e:
                                         logger.debug(f"Error reading label for channel {i}: {e}")
-                                        channel_labels[i] = f"Channel {i}"
+                                        all_channel_labels[i] = f"Channel {i}"
                                     try:
                                         ch = ch.next_sibling()
                                     except:
                                         break
                                     i += 1
-                                logger.info(f"Extracted {len(channel_labels)} channel labels for {stream_name}")
+                                logger.info(f"Extracted {len(all_channel_labels)} channel labels for {stream_name}")
                             else:
                                 logger.debug(f"No channels metadata found for {stream_name}")
                         else:
@@ -336,6 +336,32 @@ class LSLRecorder:
                     logger.warning(f"Could not extract channel labels for {stream_name}: {e}")
                     import traceback
                     logger.debug(traceback.format_exc())
+                
+                # Check if channel filtering is applied for this stream
+                channel_filter = self.stream_channel_filters.get(stream_name, None)
+                filtered_channel_indices = None
+                filtered_channel_labels = {}
+                original_channel_count = inlet_info.channel_count() if inlet_info else stream.channel_count()
+                recorded_channel_count = original_channel_count
+                
+                if channel_filter and len(channel_filter) > 0:
+                    # Filter channel labels to only include recorded channels
+                    # Map filtered indices to sequential indices (0, 1, 2, ...)
+                    filtered_channel_indices = channel_filter.copy()
+                    for new_idx, original_idx in enumerate(channel_filter):
+                        if original_idx in all_channel_labels:
+                            # Use new_idx as key (0, 1, 2, ...) to match data array indices
+                            filtered_channel_labels[str(new_idx)] = all_channel_labels[original_idx]
+                        else:
+                            filtered_channel_labels[str(new_idx)] = f"Channel {original_idx}"
+                    recorded_channel_count = len(channel_filter)
+                    logger.info(f"Channel filtering applied to {stream_name}: recording {len(channel_filter)} of {original_channel_count} channels (indices: {channel_filter})")
+                else:
+                    # No filtering - use all channels
+                    # Convert to string keys to match data array indices (0, 1, 2, ...)
+                    for idx, label in all_channel_labels.items():
+                        filtered_channel_labels[str(idx)] = label
+                    logger.debug(f"No channel filtering for {stream_name} - recording all {original_channel_count} channels")
                 
                 # Store stream info with full metadata
                 logger.debug(f"Storing stream info for {stream_name}")
@@ -368,15 +394,17 @@ class LSLRecorder:
                 info = {
                     'name': stream_name,
                     'type': stream.type(),
-                    'channel_count': stream.channel_count(),
+                    'channel_count': recorded_channel_count,  # Number of channels actually recorded
+                    'original_channel_count': original_channel_count,  # Total channels available in stream
                     'source_id': stream.source_id(),
                     'session_id': self.session_id,
                     'inlet_info': inlet_info_dict,  # Store as dict for JSON serialization
-                    'channel_labels': channel_labels  # Also store as dict for easy access
+                    'channel_labels': filtered_channel_labels,  # Only labels for recorded channels (keys: "0", "1", "2", ...)
+                    'filtered_channel_indices': filtered_channel_indices  # Original channel indices that were recorded (e.g., [0, 1, 2, 3, 4, 5])
                 }
                 self.stream_info.append(info)
-                if channel_labels:
-                    logger.info(f"Recording stream: {stream_name} ({stream.type()}) with {len(channel_labels)} labeled channels")
+                if filtered_channel_labels:
+                    logger.info(f"Recording stream: {stream_name} ({stream.type()}) with {len(filtered_channel_labels)} recorded channels (of {original_channel_count} available)")
                 else:
                     logger.info(f"Recording stream: {stream_name} ({stream.type()})")
             

@@ -347,8 +347,8 @@ class EditProjectDialog(QDialog):
         self.config_layout.addRow("Recording Quality:", self.quality_combo)
         
         self.fps_spin = QSpinBox()
-        self.fps_spin.setRange(15, 60)
-        self.fps_spin.setValue(30)
+        self.fps_spin.setRange(1, 60)
+        self.fps_spin.setValue(15)
         self.fps_spin.setSuffix(" FPS")
         self.config_layout.addRow("Frame Rate:", self.fps_spin)
         
@@ -406,6 +406,24 @@ class EditProjectDialog(QDialog):
         self.normalize_coords_check = QCheckBox()
         self.normalize_coords_check.setChecked(True)
         self.config_layout.addRow("Normalize Mouse Coordinates:", self.normalize_coords_check)
+        
+        # Screen recording settings (for embedded webpage projects)
+        screen_recording_group = QGroupBox("Screen Recording Settings")
+        screen_recording_layout = QFormLayout()
+        
+        self.embedded_fps_spin = QSpinBox()
+        self.embedded_fps_spin.setRange(1, 60)
+        self.embedded_fps_spin.setValue(15)
+        self.embedded_fps_spin.setSuffix(" FPS")
+        screen_recording_layout.addRow("Frame Rate:", self.embedded_fps_spin)
+        
+        self.embedded_quality_combo = QComboBox()
+        self.embedded_quality_combo.addItems(["low", "medium", "high"])
+        self.embedded_quality_combo.setCurrentText("high")
+        screen_recording_layout.addRow("Recording Quality:", self.embedded_quality_combo)
+        
+        screen_recording_group.setLayout(screen_recording_layout)
+        self.config_layout.addRow(screen_recording_group)
         
         # Initialize state
         self._on_fullscreen_toggled()
@@ -483,6 +501,17 @@ class EditProjectDialog(QDialog):
                 self.window_width_spin.setValue(config.window_size[0])
                 self.window_height_spin.setValue(config.window_size[1])
             self.normalize_coords_check.setChecked(config.normalize_mouse_coordinates if hasattr(config, 'normalize_mouse_coordinates') else True)
+            
+            # Load screen recording config if available
+            if self.project.screen_recording_config:
+                screen_config = self.project.screen_recording_config
+                self.embedded_fps_spin.setValue(screen_config.fps)
+                self.embedded_quality_combo.setCurrentText(screen_config.recording_quality)
+            else:
+                # Use defaults
+                self.embedded_fps_spin.setValue(15)
+                self.embedded_quality_combo.setCurrentText("high")
+            
             # Update UI state based on fullscreen setting
             self._on_fullscreen_toggled()
     
@@ -539,7 +568,10 @@ class EditProjectDialog(QDialog):
                 'fullscreen': True,  # Keep for backward compatibility
                 'window_size': window_size,
                 'enforce_fullscreen': self.enforce_fullscreen_check.isChecked(),
-                'normalize_mouse_coordinates': self.normalize_coords_check.isChecked()
+                'normalize_mouse_coordinates': self.normalize_coords_check.isChecked(),
+                # Screen recording settings
+                'screen_recording_fps': self.embedded_fps_spin.value(),
+                'screen_recording_quality': self.embedded_quality_combo.currentText()
             })
         
         return config
@@ -1942,7 +1974,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             # Default config for embedded webpage sessions
             config = ScreenRecordingConfig(
                 recording_quality="high",
-                fps=30,
+                fps=15,  # Default 15 FPS
                 resolution=None,  # Fullscreen
                 include_audio=False,
                 mouse_tracking=True
@@ -4397,13 +4429,13 @@ class MainWindow(QMainWindow):
                     from .models import ScreenRecordingConfig
                     self.current_project.screen_recording_config = ScreenRecordingConfig(
                         recording_quality=dialog.project_config.get('recording_quality', 'high'),
-                        fps=dialog.project_config.get('fps', 30),
+                        fps=dialog.project_config.get('fps', 15),
                         resolution=None,
                         include_audio=dialog.project_config.get('include_audio', False),
                         mouse_tracking=dialog.project_config.get('mouse_tracking', True)
                     )
                 elif self.current_project.project_type == ProjectType.EMBEDDED_WEBPAGE:
-                    from .models import EmbeddedWebpageConfig
+                    from .models import EmbeddedWebpageConfig, ScreenRecordingConfig
                     # Preserve existing LSL config if it exists
                     existing_lsl_config = self.current_project.embedded_webpage_config.lsl_config if self.current_project.embedded_webpage_config else None
                     # Get enable_marker_api from LSL config if available, otherwise from existing config, otherwise default to True
@@ -4422,6 +4454,15 @@ class MainWindow(QMainWindow):
                         enforce_fullscreen=dialog.project_config.get('enforce_fullscreen', False),
                         normalize_mouse_coordinates=dialog.project_config.get('normalize_mouse_coordinates', True),
                         lsl_config=existing_lsl_config  # Preserve LSL config
+                    )
+                    
+                    # Set screen recording config for embedded webpage projects
+                    self.current_project.screen_recording_config = ScreenRecordingConfig(
+                        recording_quality=dialog.project_config.get('screen_recording_quality', 'high'),
+                        fps=dialog.project_config.get('screen_recording_fps', 15),
+                        resolution=None,  # Fullscreen
+                        include_audio=False,
+                        mouse_tracking=True
                     )
                 
                 # Update modified date
