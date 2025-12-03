@@ -10,6 +10,7 @@ Notes:
 from typing import Optional
 import time
 import threading
+import queue
 
 try:
     from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds, BrainFlowPresets
@@ -68,16 +69,34 @@ class EmotiBitBrainflowStreamer:
         logger = logging.getLogger(__name__)
         logger.info("Stopping BrainFlow EmotiBit streamer")
         self._stop_event.set()
+        
+        # Try to join the thread, but don't wait forever if it's stuck
         if self._thread:
             self._thread.join(timeout)
-        # cleanup
+            if self._thread.is_alive():
+                logger.warning(
+                    f"BrainFlow thread did not stop within {timeout} seconds. "
+                    "The connection attempt may be hanging. The thread will continue in background."
+                )
+        
+        # Cleanup - only try if board was actually created and session prepared
         try:
             if self._board:
-                self._board.stop_stream()
-                self._board.release_session()
-        except Exception:
-            pass
+                # Check if session was actually prepared before trying to stop
+                try:
+                    self._board.stop_stream()
+                except Exception as e:
+                    logger.debug(f"Could not stop stream (may not have started): {e}")
+                try:
+                    self._board.release_session()
+                except Exception as e:
+                    logger.debug(f"Could not release session (may not have been prepared): {e}")
+        except Exception as e:
+            logger.debug(f"Error during cleanup: {e}")
+        
         self._started = False
+        self._board = None
+        self._outlet = None
 
     def _run(self):
         import logging
@@ -88,7 +107,15 @@ class EmotiBitBrainflowStreamer:
             params.ip_address = self.ip_address
             logger.info(f"Using specified IP address: {self.ip_address}")
         else:
-            logger.info("No IP address specified, using auto-discovery (this may take longer)")
+            logger.info("No IP address specified, using auto-discovery (this may take 15-30 seconds)")
+            # Increase timeout for auto-discovery (default is often too short)
+            # BrainFlow uses timeout in seconds, 0 means default, but we'll try to set a longer one
+            try:
+                params.timeout = 30  # 30 second timeout for auto-discovery
+                logger.info("Set auto-discovery timeout to 30 seconds")
+            except AttributeError:
+                # Some BrainFlow versions may not support timeout parameter
+                logger.debug("Timeout parameter not available in this BrainFlow version")
 
         board_id = BoardIds.EMOTIBIT_BOARD.value
         board = BoardShim(board_id, params)
@@ -97,8 +124,88 @@ class EmotiBitBrainflowStreamer:
 
         try:
             logger.info("Attempting to prepare BrainFlow board session...")
-            board.prepare_session()
-            logger.info("BrainFlow board session prepared successfully")
+            logger.info("Note: This may take 10-30 seconds, especially with auto-discovery")
+            logger.info("If the device is already in use by another program, this will fail")
+            
+            # Check if we should stop before attempting connection
+            if self._stop_event.is_set():
+                logger.info("Stop requested before connection attempt, aborting")
+                return
+            
+            # Try to prepare session with timeout protection
+            # Since BrainFlow's prepare_session() can hang indefinitely, we'll use a timeout wrapper
+            
+            start_time = time.time()
+            result_queue = queue.Queue()
+            exception_queue = queue.Queue()
+            
+            def prepare_with_timeout():
+                """Run prepare_session in a way that can be monitored."""
+                try:
+                    board.prepare_session()
+                    result_queue.put(True)
+                except Exception as e:
+                    exception_queue.put(e)
+            
+            # Run prepare_session in a separate thread so we can timeout
+            prep_thread = threading.Thread(target=prepare_with_timeout, daemon=True, name='PrepareSessionThread')
+            prep_thread.start()
+            
+            # Wait for result with timeout (max 45 seconds for auto-discovery)
+            max_wait_time = 45.0 if not self.ip_address else 20.0
+            prep_thread.join(timeout=max_wait_time)
+            
+            elapsed = time.time() - start_time
+            
+            # Check if thread is still running (timed out)
+            if prep_thread.is_alive():
+                logger.error(
+                    f"prepare_session() timed out after {elapsed:.2f} seconds. "
+                    "The connection attempt is taking too long or hanging."
+                )
+                logger.error(
+                    "This usually means:\n"
+                    "  1. Device is not reachable on the network\n"
+                    "  2. Auto-discovery is failing (try specifying IP address)\n"
+                    "  3. Network connectivity issues\n"
+                    "  4. Device is on a different subnet"
+                )
+                if not self.ip_address:
+                    logger.info("RECOMMENDATION: Try specifying the device IP address (e.g., 10.10.10.10) in LSL Manager")
+                
+                # Set stop event and return - don't raise exception to avoid crash
+                self._stop_event.set()
+                self._connection_error = f"Connection timeout after {elapsed:.2f} seconds"
+                return
+            
+            # Check for exception
+            if not exception_queue.empty():
+                prep_error = exception_queue.get()
+                error_str = str(prep_error)
+                logger.error(f"prepare_session() failed after {elapsed:.2f} seconds: {error_str}")
+                
+                # Provide more specific diagnostics
+                if "BOARD_NOT_READY_ERROR" in error_str or "7" in error_str:
+                    logger.error(
+                        "BOARD_NOT_READY_ERROR typically means:\n"
+                        "  1. Device is not on the network or not powered on\n"
+                        "  2. Device is already in use by another program (e.g., EmotiBit Oscilloscope)\n"
+                        "  3. Network connectivity issues (firewall, wrong subnet, etc.)\n"
+                        "  4. Auto-discovery timeout (try specifying IP address directly)\n"
+                        "  5. Device IP address may have changed"
+                    )
+                    if not self.ip_address:
+                        logger.info("Troubleshooting tip: Try specifying the device IP address in LSL Manager settings")
+                
+                raise prep_error  # Re-raise the original error
+            
+            # Check if we got a result
+            if not result_queue.empty():
+                logger.info(f"BrainFlow board session prepared successfully (took {elapsed:.2f} seconds)")
+            else:
+                # Shouldn't happen, but handle it
+                logger.warning("prepare_session() completed but no result received")
+                return
             
             logger.info("Starting BrainFlow stream...")
             board.start_stream()
@@ -283,9 +390,20 @@ class EmotiBitBrainflowStreamer:
                     "Please ensure:\n"
                     "  1. EmotiBit device is powered on and connected to the network\n"
                     "  2. Device is on the same network as this computer\n"
-                    "  3. If using auto-discovery, wait a few seconds and try again\n"
-                    "  4. Try specifying the IP address in the LSL Manager settings"
+                    "  3. NO OTHER PROGRAM is using the EmotiBit device (e.g., EmotiBit Oscilloscope, other BrainFlow apps)\n"
+                    "     → Close any other programs that might be connected to the device\n"
+                    "  4. If using auto-discovery, wait 15-30 seconds and try again\n"
+                    "  5. Try specifying the IP address directly in the LSL Manager settings\n"
+                    "  6. Check firewall settings - BrainFlow needs UDP port access\n"
+                    "  7. Verify device IP hasn't changed (check router or device settings)"
                 )
+                # Additional diagnostic info
+                if not self.ip_address:
+                    logger.info("DIAGNOSTIC: Auto-discovery is being used. This can fail if:")
+                    logger.info("  - Device is on a different subnet")
+                    logger.info("  - Network has multiple interfaces (WiFi + Ethernet)")
+                    logger.info("  - Firewall is blocking UDP broadcasts")
+                    logger.info("  → Try specifying the device IP address (e.g., 10.10.10.10) in LSL Manager")
             elif "timeout" in error_msg.lower():
                 logger.error(
                     "Connection timeout. The EmotiBit device may not be reachable. "
