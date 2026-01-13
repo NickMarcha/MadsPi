@@ -3143,6 +3143,13 @@ class SessionReviewWindow(QMainWindow):
         self._seeking = False
         timeline_layout.addWidget(self.timeline_slider)
         
+        # Overlay controls
+        timeline_layout.addWidget(QLabel("  |  Overlays:"))
+        self.show_gaze_check = QCheckBox("Show Gaze")
+        self.show_gaze_check.setChecked(True)
+        timeline_layout.addWidget(self.show_gaze_check)
+        self.show_gaze_check.toggled.connect(self._update_overlay)
+        
         video_layout.addLayout(timeline_layout)
         
         main_splitter.addWidget(video_widget)
@@ -4119,10 +4126,10 @@ class SessionReviewWindow(QMainWindow):
                 import traceback
                 traceback.print_exc()
         
-        # Remove existing overlay items (mouse cursor and trail) - keep video frame
+        # Remove existing overlay items (mouse cursor, trail, and gaze points) - keep video frame
         overlay_items = []
         for item in self.video_scene.items():
-            # Remove only overlay graphics items (mouse cursor and trail)
+            # Remove only overlay graphics items (mouse cursor, trail, and gaze)
             if isinstance(item, (QGraphicsEllipseItem, QGraphicsLineItem)):
                 overlay_items.append(item)
         
@@ -4196,6 +4203,10 @@ class SessionReviewWindow(QMainWindow):
                     alpha = int(255 * (i / len(recent_positions)))
                     line.setPen(QPen(QColor(255, 0, 0, alpha), 1))
                     self.video_scene.addItem(line)
+        
+        # Draw gaze overlay if enabled
+        if self.show_gaze_check.isChecked():
+            self._draw_gaze_overlay()
     
     def _get_mouse_position_at_time(self, time: float) -> Optional[tuple]:
         """Get mouse position at a specific time from LSL data only."""
@@ -4244,6 +4255,201 @@ class SessionReviewWindow(QMainWindow):
                             trail.append((pos[0], pos[1]))
         
         return trail
+    
+    def _get_gaze_position_at_time(self, time: float) -> Optional[Dict[str, Any]]:
+        """Get gaze position at a specific time from LSL data.
+        
+        Returns a dict with keys: 'left_x', 'left_y', 'right_x', 'right_y', 
+        'left_valid', 'right_valid', or None if no valid gaze data found.
+        """
+        closest = None
+        min_diff = float('inf')
+        
+        for sample in self.lsl_data:
+            # Check for Tobii eye tracker stream - prefer stream_type check as it's more reliable
+            stream_type = sample.get('stream_type', '')
+            stream_name = sample.get('stream_name', '')
+            if stream_type == 'ET' or 'Tobii' in stream_name or 'Eyetracker' in stream_name:
+                relative_time = sample.get('relative_time', 0.0)
+                diff = abs(relative_time - time)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest = sample
+        
+        if closest:
+            data = closest.get('data', [])
+            if isinstance(data, list) and len(data) >= 6:
+                # Gaze data format: [left_gaze_x, left_gaze_y, right_gaze_x, right_gaze_y, 
+                #                    left_validity, right_validity, ...]
+                left_x = data[0]
+                left_y = data[1]
+                right_x = data[2]
+                right_y = data[3]
+                left_valid = data[4] if len(data) > 4 else 1.0
+                right_valid = data[5] if len(data) > 5 else 1.0
+                
+                return {
+                    'left_x': left_x,
+                    'left_y': left_y,
+                    'right_x': right_x,
+                    'right_y': right_y,
+                    'left_valid': left_valid,
+                    'right_valid': right_valid
+                }
+        
+        return None
+    
+    def _get_gaze_trail(self, time: float, duration: float = 2.0) -> List[Dict[str, Any]]:
+        """Get gaze trail (positions) for the last N seconds from LSL data.
+        
+        Returns a list of dicts with keys: 'left_x', 'left_y', 'right_x', 'right_y',
+        'left_valid', 'right_valid', 'relative_time'.
+        """
+        start_time = max(0, time - duration)
+        end_time = time
+        
+        trail = []
+        for sample in self.lsl_data:
+            # Check for Tobii eye tracker stream - prefer stream_type check as it's more reliable
+            stream_type = sample.get('stream_type', '')
+            stream_name = sample.get('stream_name', '')
+            if stream_type == 'ET' or 'Tobii' in stream_name or 'Eyetracker' in stream_name:
+                relative_time = sample.get('relative_time', 0.0)
+                if start_time <= relative_time <= end_time:
+                    data = sample.get('data', [])
+                    if isinstance(data, list) and len(data) >= 6:
+                        left_x = data[0]
+                        left_y = data[1]
+                        right_x = data[2]
+                        right_y = data[3]
+                        left_valid = data[4] if len(data) > 4 else 1.0
+                        right_valid = data[5] if len(data) > 5 else 1.0
+                        
+                        trail.append({
+                            'left_x': left_x,
+                            'left_y': left_y,
+                            'right_x': right_x,
+                            'right_y': right_y,
+                            'left_valid': left_valid,
+                            'right_valid': right_valid,
+                            'relative_time': relative_time
+                        })
+        
+        # Sort by time
+        trail.sort(key=lambda x: x['relative_time'])
+        return trail
+    
+    def _draw_gaze_overlay(self):
+        """Draw gaze points and trail on the video overlay."""
+        if not self.video_original_width or not self.video_original_height:
+            return
+        
+        # Get current gaze position
+        gaze_pos = self._get_gaze_position_at_time(self.current_time)
+        if gaze_pos:
+            # Draw left eye gaze point
+            if gaze_pos['left_valid'] > 0.5:  # Valid if > 0.5
+                left_x = gaze_pos['left_x']
+                left_y = gaze_pos['left_y']
+                # Gaze coordinates are normalized (0-1)
+                video_x = left_x * self.video_original_width
+                video_y = left_y * self.video_original_height
+                view_x = video_x * self.video_scale_factor + self.video_offset_x
+                view_y = video_y * self.video_scale_factor + self.video_offset_y
+                
+                # Draw left eye gaze point (blue circle)
+                left_cursor = QGraphicsEllipseItem(view_x - 6, view_y - 6, 12, 12)
+                left_cursor.setPen(QPen(QColor(0, 150, 255), 2))
+                left_cursor.setBrush(QBrush(QColor(0, 150, 255, 120)))
+                self.video_scene.addItem(left_cursor)
+            
+            # Draw right eye gaze point
+            if gaze_pos['right_valid'] > 0.5:  # Valid if > 0.5
+                right_x = gaze_pos['right_x']
+                right_y = gaze_pos['right_y']
+                # Gaze coordinates are normalized (0-1)
+                video_x = right_x * self.video_original_width
+                video_y = right_y * self.video_original_height
+                view_x = video_x * self.video_scale_factor + self.video_offset_x
+                view_y = video_y * self.video_scale_factor + self.video_offset_y
+                
+                # Draw right eye gaze point (green circle)
+                right_cursor = QGraphicsEllipseItem(view_x - 6, view_y - 6, 12, 12)
+                right_cursor.setPen(QPen(QColor(0, 255, 150), 2))
+                right_cursor.setBrush(QBrush(QColor(0, 255, 150, 120)))
+                self.video_scene.addItem(right_cursor)
+            
+            # Draw combined/averaged gaze point if both eyes are valid
+            if gaze_pos['left_valid'] > 0.5 and gaze_pos['right_valid'] > 0.5:
+                avg_x = (gaze_pos['left_x'] + gaze_pos['right_x']) / 2.0
+                avg_y = (gaze_pos['left_y'] + gaze_pos['right_y']) / 2.0
+                video_x = avg_x * self.video_original_width
+                video_y = avg_y * self.video_original_height
+                view_x = video_x * self.video_scale_factor + self.video_offset_x
+                view_y = video_y * self.video_scale_factor + self.video_offset_y
+                
+                # Draw averaged gaze point (white/yellow circle, slightly larger)
+                avg_cursor = QGraphicsEllipseItem(view_x - 8, view_y - 8, 16, 16)
+                avg_cursor.setPen(QPen(QColor(255, 255, 0), 2))
+                avg_cursor.setBrush(QBrush(QColor(255, 255, 0, 80)))
+                self.video_scene.addItem(avg_cursor)
+        
+        # Draw gaze trail (recent positions)
+        gaze_trail = self._get_gaze_trail(self.current_time, duration=2.0)  # Last 2 seconds
+        if len(gaze_trail) > 1:
+            # Draw left eye trail
+            left_trail_points = []
+            right_trail_points = []
+            avg_trail_points = []
+            
+            for point in gaze_trail:
+                if point['left_valid'] > 0.5:
+                    left_x = point['left_x'] * self.video_original_width * self.video_scale_factor + self.video_offset_x
+                    left_y = point['left_y'] * self.video_original_height * self.video_scale_factor + self.video_offset_y
+                    left_trail_points.append((left_x, left_y))
+                
+                if point['right_valid'] > 0.5:
+                    right_x = point['right_x'] * self.video_original_width * self.video_scale_factor + self.video_offset_x
+                    right_y = point['right_y'] * self.video_original_height * self.video_scale_factor + self.video_offset_y
+                    right_trail_points.append((right_x, right_y))
+                
+                # Averaged trail if both valid
+                if point['left_valid'] > 0.5 and point['right_valid'] > 0.5:
+                    avg_x = (point['left_x'] + point['right_x']) / 2.0
+                    avg_y = (point['left_y'] + point['right_y']) / 2.0
+                    avg_x_scaled = avg_x * self.video_original_width * self.video_scale_factor + self.video_offset_x
+                    avg_y_scaled = avg_y * self.video_original_height * self.video_scale_factor + self.video_offset_y
+                    avg_trail_points.append((avg_x_scaled, avg_y_scaled))
+            
+            # Draw left eye trail (blue, faded)
+            if len(left_trail_points) > 1:
+                for i in range(len(left_trail_points) - 1):
+                    x1, y1 = left_trail_points[i]
+                    x2, y2 = left_trail_points[i + 1]
+                    line = QGraphicsLineItem(x1, y1, x2, y2)
+                    alpha = int(100 * (i / len(left_trail_points)))  # Fade trail
+                    line.setPen(QPen(QColor(0, 150, 255, alpha), 1))
+                    self.video_scene.addItem(line)
+            
+            # Draw right eye trail (green, faded)
+            if len(right_trail_points) > 1:
+                for i in range(len(right_trail_points) - 1):
+                    x1, y1 = right_trail_points[i]
+                    x2, y2 = right_trail_points[i + 1]
+                    line = QGraphicsLineItem(x1, y1, x2, y2)
+                    alpha = int(100 * (i / len(right_trail_points)))  # Fade trail
+                    line.setPen(QPen(QColor(0, 255, 150, alpha), 1))
+                    self.video_scene.addItem(line)
+            
+            # Draw averaged trail (yellow, more visible)
+            if len(avg_trail_points) > 1:
+                for i in range(len(avg_trail_points) - 1):
+                    x1, y1 = avg_trail_points[i]
+                    x2, y2 = avg_trail_points[i + 1]
+                    line = QGraphicsLineItem(x1, y1, x2, y2)
+                    alpha = int(150 * (i / len(avg_trail_points)))  # Fade trail
+                    line.setPen(QPen(QColor(255, 255, 0, alpha), 2))
+                    self.video_scene.addItem(line)
     
     def _on_event_selected(self):
         """Handle event selection - jump to that time."""
