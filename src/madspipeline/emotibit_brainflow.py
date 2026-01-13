@@ -269,7 +269,7 @@ class EmotiBitBrainflowStreamer:
                 
                 # Determine channel structure from all presets
                 # Based on log analysis:
-                # - ANCILLARY_PRESET (6 channels): package_num(0), EDA(1), temperature(2), temperature2(3), timestamp(4), marker(5)
+                # - ANCILLARY_PRESET (6 channels): package_num(0), humidity/EDA(1), temperature(2), temperature/EDA(3), timestamp(4), marker(5)
                 # - AUXILIARY_PRESET (6 channels): package_num(0), PPG_IR(1), PPG_Red(2), PPG_Green(3), timestamp(4), marker(5)
                 # - DEFAULT_PRESET (12 channels): package_num(0), accel(1-3), gyro(4-6), mag(7-9), timestamp(10), marker(11)
                 
@@ -300,9 +300,9 @@ class EmotiBitBrainflowStreamer:
                 channel_names = []
                 
                 # ANCILLARY_PRESET: channels 1-3 (skip package_num, timestamp, marker)
-                # Based on logs and user feedback: channel 1 = EDA, channel 2 = Temperature, channel 3 = Temperature2
+                # Based on logs: channel 1 = humidity/EDA, channel 2 = temperature, channel 3 = EDA
                 if data_anc is not None and data_anc.size > 0 and data_anc.shape[0] >= 4:
-                    channel_names.extend(["EDA", "Temperature", "Temperature2"])
+                    channel_names.extend(["Humidity", "Temperature", "EDA"])
                 
                 # AUXILIARY_PRESET: channels 1-3 (skip package_num, timestamp, marker)
                 # Based on logs: channels 1-3 are PPG_IR, PPG_Red, PPG_Green
@@ -321,7 +321,7 @@ class EmotiBitBrainflowStreamer:
                 # Fallback if no data available yet
                 if n_channels == 0:
                     # Use expected structure based on documentation
-                    channel_names = ["EDA", "Temperature", "Temperature2", 
+                    channel_names = ["Humidity", "Temperature", "EDA", 
                                    "PPG_IR", "PPG_Red", "PPG_Green",
                                    "Accel_X", "Accel_Y", "Accel_Z", 
                                    "Gyro_X", "Gyro_Y", "Gyro_Z",
@@ -432,7 +432,7 @@ class EmotiBitBrainflowStreamer:
                 logger.warning(f"Could not check presets: {e}")
 
             # Main loop: read from all three presets and combine into single stream
-            # - ANCILLARY_PRESET: EDA, temperature, temperature2
+            # - ANCILLARY_PRESET: temperature, humidity, EDA
             # - AUXILIARY_PRESET: PPG (IR, Red, Green)
             # - DEFAULT_PRESET: motion sensors (accel, gyro, mag)
             first_sample_logged = False
@@ -468,15 +468,15 @@ class EmotiBitBrainflowStreamer:
                     logger.debug(f"Could not read DEFAULT_PRESET: {e}")
                 
                 # Combine data from all presets into single sample
-                # Order: ANCILLARY (EDA, temperature, temperature2), AUXILIARY (PPG), DEFAULT (motion)
+                # Order: ANCILLARY (humidity, temperature, EDA), AUXILIARY (PPG), DEFAULT (motion)
                 combined_sample = []
                 
-                # ANCILLARY_PRESET: channels 1, 2, 3 (EDA, temperature, temperature2)
+                # ANCILLARY_PRESET: channels 1, 2, 3 (humidity, temperature, EDA)
                 if last_anc_data is not None and len(last_anc_data) >= 4:
                     combined_sample.extend([
-                        float(last_anc_data[1]),  # EDA
+                        float(last_anc_data[1]),  # Humidity
                         float(last_anc_data[2]),  # Temperature
-                        float(last_anc_data[3])   # Temperature2
+                        float(last_anc_data[3])   # EDA
                     ])
                 else:
                     # Use zeros if no data available
