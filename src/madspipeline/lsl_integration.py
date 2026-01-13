@@ -544,17 +544,53 @@ class LSLRecorder:
     
     def stop_recording(self):
         """Stop recording LSL streams."""
+        import logging
+        import threading
+        import time
+        logger = logging.getLogger(__name__)
+        
+        logger.debug("stop_recording() called")
         self.is_recording = False
+        logger.debug(f"Set is_recording=False, closing {len(self.inlets)} inlets...")
         
-        # Close all inlets
-        for inlet in self.inlets:
+        # Close all inlets with timeout protection
+        inlets_to_close = list(self.inlets)  # Make a copy to avoid modification during iteration
+        for i, inlet in enumerate(inlets_to_close):
             try:
-                inlet.close_stream()
-            except Exception:
-                pass
+                logger.debug(f"Closing inlet {i+1}/{len(inlets_to_close)}...")
+                
+                # Use a thread with timeout to prevent hanging
+                closed = threading.Event()
+                error_occurred = [False]
+                
+                def close_inlet():
+                    try:
+                        inlet.close_stream()
+                        closed.set()
+                    except Exception as e:
+                        error_occurred[0] = True
+                        logger.warning(f"Error in close_inlet thread for inlet {i+1}: {e}")
+                        closed.set()
+                
+                close_thread = threading.Thread(target=close_inlet, daemon=True)
+                close_thread.start()
+                
+                # Wait with timeout (2 seconds max per inlet)
+                if closed.wait(timeout=2.0):
+                    if error_occurred[0]:
+                        logger.warning(f"Inlet {i+1} close had errors but completed")
+                    else:
+                        logger.debug(f"Inlet {i+1} closed successfully")
+                else:
+                    logger.warning(f"Inlet {i+1} close timed out after 2 seconds, continuing anyway")
+                
+            except Exception as e:
+                logger.warning(f"Error closing inlet {i+1}: {e}", exc_info=True)
         
+        logger.debug("Clearing inlets list...")
         self.inlets.clear()
         logger.info(f"Stopped recording. Captured {len(self.recorded_data)} samples.")
+        logger.debug("stop_recording() completed")
     
     def save_to_file(self, filepath: str, additional_tracking_data: Optional[List[Dict[str, Any]]] = None):
         """Save recorded data to a JSON file, including additional tracking data.

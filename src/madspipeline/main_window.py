@@ -1457,6 +1457,9 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         # BrainFlow streamer (for EmotiBit)
         self.brainflow_streamer = None
         
+        # Tobii eye tracker streamer
+        self.tobii_streamer = None
+        
         # Screen recording component
         self.screen_recorder: Optional[ScreenRecorder] = None
         
@@ -2275,20 +2278,71 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         
         if self.lsl_recorder:
             try:
-                self.lsl_recorder.stop_recording()
+                logger.info("[Session] Stopping LSL recorder...")
+                # Use a timeout to prevent hanging
+                import threading
+                import time
+                
+                stop_completed = threading.Event()
+                stop_error = [None]
+                
+                def stop_recorder():
+                    try:
+                        self.lsl_recorder.stop_recording()
+                        stop_completed.set()
+                    except Exception as e:
+                        stop_error[0] = e
+                        stop_completed.set()
+                
+                stop_thread = threading.Thread(target=stop_recorder, daemon=True)
+                stop_thread.start()
+                
+                # Wait with timeout (5 seconds max)
+                if stop_completed.wait(timeout=5.0):
+                    if stop_error[0]:
+                        logger.error(f"Error stopping LSL recorder: {stop_error[0]}", exc_info=True)
+                    else:
+                        logger.info("[Session] LSL recorder stopped")
+                else:
+                    logger.warning("[Session] LSL recorder stop timed out after 5 seconds, continuing anyway")
             except Exception as e:
                 logger.error(f"Error stopping LSL recorder: {e}", exc_info=True)
         
+        # Process Qt events to keep UI responsive
+        from PySide6.QtWidgets import QApplication
+        try:
+            logger.info("[Session] About to process Qt events...")
+            QApplication.processEvents()
+            logger.info("[Session] Processed Qt events after stopping LSL recorder")
+        except Exception as e:
+            logger.error(f"[Session] Error processing Qt events: {e}", exc_info=True)
+        
+        # Check for streamers
+        logger.info("[Session] Checking for streamers to stop...")
+        try:
+            logger.info(f"[Session] brainflow_streamer exists: {self.brainflow_streamer is not None}")
+            logger.info(f"[Session] tobii_streamer exists: {self.tobii_streamer is not None}")
+            logger.info(f"[Session] lsl_streamer exists: {self.lsl_streamer is not None}")
+            logger.info(f"[Session] lsl_mouse_streamer exists: {self.lsl_mouse_streamer is not None}")
+        except Exception as e:
+            logger.error(f"[Session] Error checking streamers: {e}", exc_info=True)
+        
         # Stop BrainFlow streamer if running
+        logger.info("[Session] Checking BrainFlow streamer...")
         if self.brainflow_streamer:
             try:
+                logger.info("[Session] Stopping BrainFlow streamer...")
                 self.brainflow_streamer.stop()
                 logger.info("[LSL] Stopped BrainFlow EmotiBit streamer")
             except Exception as e:
-                logger.warning(f"[LSL] Error stopping BrainFlow streamer: {e}")
-            self.brainflow_streamer = None
+                logger.warning(f"[LSL] Error stopping BrainFlow streamer: {e}", exc_info=True)
+            finally:
+                self.brainflow_streamer = None
+        else:
+            logger.info("[Session] No BrainFlow streamer to stop")
         
         # Stop Tobii eye tracker streamer if running
+        logger.info("[Session] Checking Tobii streamer...")
         if self.tobii_streamer:
             try:
                 logger.info("[LSL] Stopping Tobii eye tracker streamer...")
@@ -2298,22 +2352,51 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 logger.warning(f"[LSL] Error stopping Tobii streamer: {e}", exc_info=True)
             finally:
                 self.tobii_streamer = None
+        else:
+            logger.info("[Session] No Tobii streamer to stop")
         
         # Close LSL streamers
+        logger.info("[Session] Closing LSL streamers...")
         if self.lsl_streamer:
-            self.lsl_streamer.close()
-            self.lsl_streamer = None
+            try:
+                logger.debug("[Session] Closing LSL bridge streamer...")
+                self.lsl_streamer.close()
+                logger.debug("[Session] LSL bridge streamer closed")
+            except Exception as e:
+                logger.warning(f"[Session] Error closing LSL bridge streamer: {e}", exc_info=True)
+            finally:
+                self.lsl_streamer = None
+        else:
+            logger.debug("[Session] No LSL bridge streamer to close")
+            
         if self.lsl_mouse_streamer:
-            self.lsl_mouse_streamer.close()
-            self.lsl_mouse_streamer = None
+            try:
+                logger.debug("[Session] Closing LSL mouse streamer...")
+                self.lsl_mouse_streamer.close()
+                logger.debug("[Session] LSL mouse streamer closed")
+            except Exception as e:
+                logger.warning(f"[Session] Error closing LSL mouse streamer: {e}", exc_info=True)
+            finally:
+                self.lsl_mouse_streamer = None
+        else:
+            logger.debug("[Session] No LSL mouse streamer to close")
+        
+        logger.info("[Session] All streamers closed")
+        
+        # Process Qt events again
+        QApplication.processEvents()
+        logger.debug("[Session] Processed Qt events after closing streamers")
         
         # Calculate session duration
+        logger.info("[Session] Calculating session duration...")
         session_end_time = datetime.now()
         duration = (session_end_time - self.session_start_time).total_seconds()
         self.session.duration = duration
+        logger.debug(f"[Session] Session duration: {duration:.2f} seconds")
         
         # Save session data (including LSL data) - use stored references
         # Temporarily restore recorders for saving
+        logger.info("[Session] Preparing to save session data...")
         self._screen_recorder_ref = screen_recorder_to_save
         self.lsl_recorder = lsl_recorder_to_save
         try:
@@ -2325,6 +2408,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             # Still emit signal and close window even if save failed
         finally:
             # Now we can set them to None
+            logger.debug("[Session] Cleaning up recorder references...")
             self.lsl_recorder = None
             self._screen_recorder_ref = None
             logger.debug("[Session] Cleaned up recorder references")

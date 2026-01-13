@@ -78,23 +78,28 @@ class TobiiEyetrackerStreamer:
         logger.info("Stopping Tobii eye tracker streamer")
         self._stop_event.set()
         
-        if self._thread:
-            self._thread.join(timeout)
-            if self._thread.is_alive():
-                logger.warning(f"Tobii thread did not stop within {timeout} seconds")
-        
-        # Unsubscribe from gaze data if connected
+        # Try to unsubscribe immediately if we have the eyetracker
+        # This helps ensure cleanup happens even if thread.join hangs
         if self._eyetracker:
             try:
-                # Note: We need to keep track of the callback to unsubscribe
-                # For now, we'll just close the connection
-                pass
+                # The callback is defined in _run, so we can't unsubscribe here directly
+                # But we can at least log that we're trying to stop
+                logger.debug("Eye tracker connection exists, thread will handle unsubscribe")
             except Exception as e:
-                logger.debug(f"Error unsubscribing from gaze data: {e}")
+                logger.debug(f"Error during stop preparation: {e}")
+        
+        if self._thread:
+            logger.debug(f"Waiting for Tobii thread to stop (timeout: {timeout}s)...")
+            self._thread.join(timeout)
+            if self._thread.is_alive():
+                logger.warning(f"Tobii thread did not stop within {timeout} seconds - continuing anyway")
+            else:
+                logger.debug("Tobii thread stopped successfully")
         
         self._started = False
         self._eyetracker = None
         self._outlet = None
+        logger.info("Tobii eye tracker streamer stopped")
     
     def _run(self):
         """Main thread function for streaming gaze data."""
