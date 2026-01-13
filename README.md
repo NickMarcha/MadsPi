@@ -61,6 +61,13 @@ python src/madspipeline/main.py
 - **Linux**: Set udev rules for device access
 - **macOS**: Ensure necessary permissions in System Settings
 
+**Tobii Eye Tracker Setup:**
+- Install `tobii-research` Python package (included in `requirements.txt`)
+- Connect Tobii Pro Spark via USB
+- Ensure device is powered (red light indicates active state)
+- Calibration is stored on the device itself (persists between sessions)
+- First-time calibration required before streaming gaze data
+
 ---
 
 ## Project Structure
@@ -75,7 +82,11 @@ MadsPipeline/
 │   ├── lsl_integration.py         # LSL streaming & recording
 │   ├── screen_recorder.py         # Video capture with sync
 │   ├── madsBridge.py              # HTML ↔ Python bridge
-│   └── lsl_manager.py             # LSL stream management UI
+│   ├── lsl_manager.py             # LSL stream management UI
+│   ├── tobii_manager.py           # Tobii eye tracker state management
+│   ├── tobii_eyetracker.py        # Tobii LSL streaming integration
+│   ├── tobii_calibration_window.py # Fullscreen calibration UI
+│   └── tobii_gaze_test_window.py  # Gaze visualization test window
 ├── tests/                         # Test suite
 │   ├── unit/                      # Unit tests (models, data)
 │   └── integration/               # Integration tests (GUI, LSL, bridge)
@@ -105,6 +116,10 @@ MadsPipeline/
 - `screen_recorder.py`: Video capture with sync event markers
 - `madsBridge.py`: HTML ↔ Python event communication
 - `lsl_manager.py`: Stream detection & configuration UI
+- `tobii_manager.py`: Centralized Tobii eye tracker state management, calibration mode, and notifications
+- `tobii_eyetracker.py`: Tobii gaze data streaming to LSL (screen space coordinates)
+- `tobii_calibration_window.py`: Fullscreen calibration interface with animated targets
+- `tobii_gaze_test_window.py`: Real-time gaze visualization for calibration validation
 
 **Data Layer**
 - `models.py`: Dataclasses for projects, sessions, configurations
@@ -317,12 +332,33 @@ tracking_data/{project_id}/sessions/{session_id}/
       "data": [6546.0, -0.188, 0.397, 0.275],
       "clock_offset": 0.0015,
       "synchronization_applied": true
+    },
+    {
+      "timestamp": 682.1,
+      "original_timestamp": 682.1012,
+      "relative_time": 10.866,
+      "stream_name": "Tobii_Eyetracker",
+      "stream_type": "ET",
+      "data": [
+        0.446, 0.414,  # left_gaze_x, left_gaze_y (normalized 0-1)
+        0.436, 0.383,  # right_gaze_x, right_gaze_y (normalized 0-1)
+        1.0, 1.0,      # left_validity, right_validity (1.0 = valid, 0.0 = invalid)
+        2.836, 2.617   # left_pupil_diameter, right_pupil_diameter (mm)
+      ],
+      "clock_offset": 0.0012,
+      "synchronization_applied": true
     }
   ]
 }
 ```
 
 **Note**: The `timestamp` field contains **synchronized timestamps** that can be directly compared across all devices. The `original_timestamp` field preserves the device's native clock time for reference.
+
+**Gaze Data Format:**
+- Coordinates are normalized (0.0-1.0) relative to display area (screen space)
+- `left_gaze_x/y` and `right_gaze_x/y`: Gaze point coordinates for each eye
+- `left_validity` and `right_validity`: Data quality (1.0 = valid, 0.0 = invalid)
+- `left_pupil_diameter` and `right_pupil_diameter`: Pupil size in millimeters
 
 ---
 
@@ -335,6 +371,8 @@ tracking_data/{project_id}/sessions/{session_id}/
 | Add bridge event | `madsBridge.py` | Already handles JSON; send via `sendEvent()` from HTML |
 | New project type | `models.py` + `main_window.py` | Add enum, config class, UI dialogs |
 | Change save location | `project_manager.py` | Modify base path; sessions → `project_path/tracking_data/` |
+| Add Tobii calibration point | `tobii_calibration_window.py` | Modify `calibration_points` list; adjust animation timing |
+| Change gaze overlay appearance | `main_window.py` | Modify `_draw_gaze_overlay()` method; adjust colors/sizes in `QGraphicsEllipseItem` |
 
 ---
 
@@ -374,6 +412,108 @@ tracking_data/{project_id}/sessions/{session_id}/
 | **Video doesn't align with events** | Verify sync marker in JSON; calculate offset: `video_time = event_relative_time - sync_event_relative_time` |
 | **HTML bridge not firing** | Confirm `madsBridge.js` loaded; check browser console for errors |
 | **Project won't load** | Verify JSON structure; check `Project.from_dict()` in project_manager.py |
+| **Tobii eye tracker not detected** | Verify USB connection; check device power (red light should be on); ensure `tobii-research` package is installed |
+| **Tobii calibration fails** | Ensure device is fully awake (red light on) before starting; wait for device wake-up after entering calibration mode; check calibration warnings in completion message |
+| **Gaze data not appearing in review** | Verify Tobii stream was recorded in LSL JSON; check "Show Gaze" checkbox is enabled in review window; ensure gaze data has valid coordinates (validity > 0.5) |
+| **Tobii stream not starting** | Use LSL Manager to test connection independently; check device is not in use by another application; verify calibration is complete |
+
+---
+
+## Tobii Eye Tracker Integration ✅
+
+### Overview
+MadsPipeline includes full support for **Tobii Pro Spark** eye trackers, providing real-time gaze data collection synchronized with video recording and interaction events.
+
+### Features
+
+**Calibration System:**
+- Fullscreen calibration window with animated targets
+- 5-point calibration procedure
+- Device wake-up detection (waits for red light before starting)
+- Calibration stored on device (persists between sessions)
+- Detailed warning display if calibration completes with issues
+- Calibration can be triggered before session launch or from LSL Manager
+
+**Gaze Data Streaming:**
+- Real-time gaze data streamed to LSL at 60 Hz
+- Screen space coordinates (normalized 0.0-1.0)
+- Left and right eye gaze points tracked separately
+- Validity flags for data quality assessment
+- Pupil diameter measurements included
+- Synchronized with LSL clock (same time domain as other devices)
+
+**Visualization:**
+- Gaze overlay in session review window
+- Left eye gaze (blue), right eye gaze (green), averaged gaze (yellow)
+- Gaze trails showing last 2 seconds of movement
+- Only valid gaze points rendered (validity > 0.5)
+- Toggle to show/hide gaze overlay
+
+**Management:**
+- LSL Manager integration for independent testing
+- Start/stop gaze streaming
+- Calibration and test functions available outside sessions
+- Device state management (connection, calibration mode, streaming)
+
+### Usage
+
+**Before Starting a Session:**
+1. Enable Tobii eye tracker in LSL configuration
+2. When launching session, you'll be prompted to calibrate
+3. Choose "Yes" to open fullscreen calibration window
+4. Follow the animated targets (5 points)
+5. Review calibration warnings if any
+6. Session will launch after calibration completes
+
+**From LSL Manager:**
+1. Open LSL Manager from project dashboard
+2. Click "Start Tobii Stream" to connect device
+3. Click "Calibrate" to perform calibration
+4. Click "Test Gaze" to visualize real-time gaze points
+5. Use these tools to debug and validate setup before sessions
+
+**In Review Window:**
+1. Open session review window
+2. Enable "Show Gaze" checkbox in timeline controls
+3. Scrub through video to see gaze points at each moment
+4. Gaze trails show movement history (last 2 seconds)
+
+### Technical Details
+
+**Files:**
+- `tobii_manager.py`: Centralized state management, notification handling, calibration mode entry/exit
+- `tobii_eyetracker.py`: LSL streaming integration (similar to EmotiBit BrainFlow streamer)
+- `tobii_calibration_window.py`: Fullscreen PySide6 calibration UI with QTimer-based animation
+- `tobii_gaze_test_window.py`: Real-time gaze visualization for validation
+
+**Data Format:**
+```python
+# LSL stream channels (8 total):
+[0] left_gaze_x      # Normalized 0.0-1.0
+[1] left_gaze_y      # Normalized 0.0-1.0
+[2] right_gaze_x     # Normalized 0.0-1.0
+[3] right_gaze_y     # Normalized 0.0-1.0
+[4] left_validity    # 1.0 = valid, 0.0 = invalid
+[5] right_validity   # 1.0 = valid, 0.0 = invalid
+[6] left_pupil_diameter   # Millimeters
+[7] right_pupil_diameter  # Millimeters
+```
+
+**Calibration Storage:**
+- Calibration data is stored **on the Tobii device itself**
+- Persists between application restarts
+- Not stored in project settings or application runtime
+- Can be retrieved using `retrieve_calibration_data()` and reapplied with `apply_calibration_data()`
+
+**State Management:**
+- `TobiiManager` handles all state transitions (DISCONNECTED → CONNECTED → CALIBRATION_MODE → STREAMING)
+- Uses notification callbacks to confirm calibration mode entry
+- Thread-safe with `threading.Lock` and `threading.Event` for state synchronization
+
+**Device Wake-up:**
+- Device wakes up when `collect_data()` is called
+- Calibration procedure includes early wake-up call before actual data collection
+- 3-second delay after wake-up ensures device is ready (red light on)
 
 ---
 
@@ -410,6 +550,19 @@ tracking_data/{project_id}/sessions/{session_id}/
 - ✅ Clock synchronization (local_clock vs wall_clock)
 - ✅ Clock offset measurement per sample
 - ✅ Video recording with sync marker events
+
+**Tobii Eye Tracker Integration (✅ Complete)**
+- ✅ Tobii Pro Spark device detection and connection
+- ✅ Fullscreen calibration window with animated targets
+- ✅ Device wake-up detection and readiness confirmation
+- ✅ Calibration stored on device (persists between sessions)
+- ✅ Gaze data streaming to LSL (60 Hz, screen space coordinates)
+- ✅ Left/right eye gaze tracking with validity flags
+- ✅ Pupil diameter measurements
+- ✅ LSL Manager integration (start/stop, calibrate, test)
+- ✅ Session launch calibration prompt
+- ✅ Gaze overlay in review window (left/right/averaged with trails)
+- ✅ Real-time gaze visualization test window
 
 **Technical Infrastructure**
 - ✅ Data models (Project, Session, Config dataclasses)
@@ -481,19 +634,23 @@ tracking_data/{project_id}/sessions/{session_id}/
 - [ ] Recording preview window - Not started
 - [ ] Fullscreen application recording optimization
 
-**Session Review & Analysis**
-- [ ] Session review window with video playback
-- [ ] Video playback controls (play, pause, seek, speed)
-- [ ] Frame-by-frame navigation
-- [ ] Tracking data overlay on playback
-- [ ] Event marker system for review
+**Session Review & Analysis** ✅
+- ✅ Session review window with video playback
+- ✅ Video playback controls (play, pause, seek, speed)
+- ✅ Frame-by-frame navigation
+- ✅ Tracking data overlay on playback (mouse cursor and trail)
+- ✅ Gaze data overlay on video (left eye, right eye, averaged gaze with trails)
+- ✅ Event marker system for review
 - [ ] Marker categorization and export
 
-**Data Visualization & Overlays**
-- [ ] Advanced overlay rendering system
-- [ ] Mouse cursor and click indicators
-- [ ] Movement trails and heatmaps
-- [ ] Time-series charts for tracking data
+**Data Visualization & Overlays** ✅ (Partial)
+- ✅ Advanced overlay rendering system
+- ✅ Mouse cursor and click indicators
+- ✅ Mouse movement trails
+- ✅ Gaze point visualization (left/right/averaged with validity checking)
+- ✅ Gaze trail rendering (last 2 seconds with fading)
+- [ ] Heatmaps
+- ✅ Time-series charts for tracking data
 - [ ] Heart rate/EDA overlays (hardware integration)
 
 **Export & Data Management**
@@ -501,12 +658,20 @@ tracking_data/{project_id}/sessions/{session_id}/
 - [ ] Project dataset export (multi-session) - See Phase 3
 - [ ] Batch export functionality
 
-**Future Hardware Integration**
+**Hardware Integration** ✅ (Partial)
 - [ ] EmotiBit device detection and streaming
-- [ ] Tobii Pro Spark eyetracker integration
+- ✅ **Tobii Pro Spark eyetracker integration** (Complete)
+  - ✅ Device detection and connection
+  - ✅ Fullscreen calibration with animated targets
+  - ✅ Gaze data streaming to LSL (60 Hz, screen space coordinates)
+  - ✅ Calibration stored on device (persists between sessions)
+  - ✅ Gaze visualization test window
+  - ✅ LSL Manager integration (start/stop, calibrate, test)
+  - ✅ Session launch calibration prompt
+  - ✅ Gaze overlay in review window (left/right/averaged with trails)
 - [ ] Plugin system for new devices
-- [ ] Advanced synchronization with multiple LSL devices
-- [ ] Post-hoc device clock synchronization
+- ✅ Advanced synchronization with multiple LSL devices (LSL clock sync)
+- ✅ Post-hoc device clock synchronization (clock offset measurements recorded)
 
 **Testing & Quality Assurance**
 - [ ] Unit tests for core functionality
@@ -531,7 +696,7 @@ tracking_data/{project_id}/sessions/{session_id}/
 | **2** | Screen recording, mouse tracking, LSL sync | ✅ Complete | ✅ Complete |
 | **3** | Data export, LSL testing & management, playback validation | Nov 25, 2025 | 🚧 In Progress |
 | **4** | Session review, video playback overlays | Dec 2025 | ⏳ Planned |
-| **5** | Hardware integration (EmotiBit, Tobii) | Jan 2026 | ⏳ Planned |
+| **5** | Hardware integration (EmotiBit, Tobii) | Jan 2026 | ✅ Tobii Complete |
 
 **Phase 3 Breakdown (Critical Path - Nov 25 Deadline):**
 - Data export system (CSV/JSON, session/project level)
