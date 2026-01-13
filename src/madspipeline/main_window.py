@@ -2,6 +2,7 @@
 Main application window for MadsPipeline.
 """
 import sys
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -88,6 +89,21 @@ from .madsBridge import Bridge
 from .lsl_integration import LSLBridgeStreamer, LSLMouseTrackingStreamer, LSLRecorder, LSL_AVAILABLE
 from .screen_recorder import ScreenRecorder, RECORDING_AVAILABLE
 from .lsl_manager import LSLStreamManagerDialog
+
+# Optional Tobii eye tracker integration
+try:
+    from .tobii_eyetracker import TobiiEyetrackerStreamer
+    from .tobii_calibration_window import TobiiCalibrationWindow
+    import tobii_research as tr
+    TOBII_AVAILABLE = True
+except Exception as e:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Tobii eye tracker integration not available: {e}")
+    TobiiEyetrackerStreamer = None
+    TobiiCalibrationWindow = None
+    tr = None
+    TOBII_AVAILABLE = False
 
 
 class ProjectCreationDialog(QDialog):
@@ -1837,20 +1853,67 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                                 # Re-raise RuntimeError (our connection failure)
                                 raise
                             except Exception as e:
+                                logger.error(f"[LSL] Error starting BrainFlow streamer: {e}", exc_info=True)
                                 if emotibit_required:
-                                    # EmotiBit is required, so this is a fatal error
-                                    logger.error(f"[LSL] Failed to start required BrainFlow streamer: {e}", exc_info=True)
                                     raise RuntimeError(
-                                        f"Failed to start EmotiBit streamer (required): {e}\n\n"
-                                        f"Please ensure:\n"
-                                        f"1. EmotiBit device is powered on and connected to the network\n"
-                                        f"2. Device is on the same network as this computer\n"
-                                        f"3. No other program is using the EmotiBit device\n"
-                                        f"4. Try specifying the IP address in the LSL Manager settings"
+                                        f"Failed to start EmotiBit streamer: {e}\n\n"
+                                        f"Please check the device connection and try again."
                                     )
+                        
+                        # Start Tobii eye tracker streamer if configured
+                        self.tobii_streamer = None
+                        if lsl_config and lsl_config.enable_tobii_eyetracker:
+                            try:
+                                if TOBII_AVAILABLE and TobiiEyetrackerStreamer:
+                                    # Check if Tobii LSL stream already exists
+                                    stream_already_exists = False
+                                    stream_name_to_check = "Tobii_Eyetracker"
+                                    
+                                    try:
+                                        logger.info("[LSL] Checking if Tobii LSL stream already exists...")
+                                        streams = resolve_streams(wait_time=1.0)
+                                        for stream in streams:
+                                            if stream.name() == stream_name_to_check or "Tobii" in stream.name():
+                                                logger.info(f"[LSL] Found existing Tobii LSL stream: {stream.name()}")
+                                                stream_already_exists = True
+                                                break
+                                    except Exception as e:
+                                        logger.debug(f"[LSL] Error checking for existing Tobii streams: {e}")
+                                    
+                                    if not stream_already_exists:
+                                        # No existing stream, create a new Tobii streamer
+                                        logger.info("[LSL] Starting Tobii eye tracker streamer...")
+                                        self.tobii_streamer = TobiiEyetrackerStreamer()
+                                        self.tobii_streamer.start()
+                                        logger.info("[LSL] Started Tobii eye tracker streamer")
+                                        
+                                        # Wait for streamer to create LSL outlet
+                                        max_wait = 5.0
+                                        wait_interval = 0.5
+                                        waited = 0.0
+                                        outlet_created = False
+                                        
+                                        while waited < max_wait:
+                                            if hasattr(self.tobii_streamer, '_outlet') and self.tobii_streamer._outlet is not None:
+                                                logger.info(f"[LSL] Tobii LSL outlet created after {waited:.1f}s")
+                                                outlet_created = True
+                                                break
+                                            
+                                            if hasattr(self.tobii_streamer, '_connection_error') and self.tobii_streamer._connection_error:
+                                                error_msg = self.tobii_streamer._connection_error
+                                                logger.warning(f"[LSL] Tobii connection issue: {error_msg}")
+                                                break
+                                            
+                                            time.sleep(wait_interval)
+                                            waited += wait_interval
+                                        
+                                        if not outlet_created:
+                                            logger.warning(f"[LSL] Tobii streamer started but LSL outlet not created after {max_wait}s")
                                 else:
-                                    # Not required, just log a warning
-                                    logger.warning(f"[LSL] Could not start BrainFlow streamer (not required): {e}")
+                                    logger.warning("[LSL] Tobii eye tracker is enabled but tobii_research is not available")
+                            except Exception as e:
+                                logger.error(f"[LSL] Error starting Tobii streamer: {e}", exc_info=True)
+                                # Don't fail the session if Tobii fails - it's optional
                         else:
                             logger.info("[LSL] EmotiBit LSL stream already exists (likely from LSL Manager), reusing it")
                             # Stream already exists, no need to create a new streamer or wait
@@ -2225,6 +2288,17 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 logger.warning(f"[LSL] Error stopping BrainFlow streamer: {e}")
             self.brainflow_streamer = None
         
+        # Stop Tobii eye tracker streamer if running
+        if self.tobii_streamer:
+            try:
+                logger.info("[LSL] Stopping Tobii eye tracker streamer...")
+                self.tobii_streamer.stop()
+                logger.info("[LSL] Stopped Tobii eye tracker streamer")
+            except Exception as e:
+                logger.warning(f"[LSL] Error stopping Tobii streamer: {e}", exc_info=True)
+            finally:
+                self.tobii_streamer = None
+        
         # Close LSL streamers
         if self.lsl_streamer:
             self.lsl_streamer.close()
@@ -2243,6 +2317,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         self._screen_recorder_ref = screen_recorder_to_save
         self.lsl_recorder = lsl_recorder_to_save
         try:
+            logger.info("[Session] Starting to save session data...")
             self._save_session_data()
             logger.info("[Session] Session data saved successfully")
         except Exception as e:
@@ -2252,6 +2327,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
             # Now we can set them to None
             self.lsl_recorder = None
             self._screen_recorder_ref = None
+            logger.debug("[Session] Cleaned up recorder references")
         
         # Emit session ended signal
         try:
@@ -2269,10 +2345,12 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         import logging
         logger = logging.getLogger(__name__)
         
+        logger.info("[Session] Creating session data directory...")
         # Create tracking data directory
         # All session data is now in sessions/{session_id}/
         tracking_dir = self.project.project_path / "sessions" / self.session.session_id
         tracking_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"[Session] Session directory: {tracking_dir}")
         
         # Save recording metadata (for precise video-event alignment)
         if hasattr(self, '_screen_recorder_ref'):
@@ -2296,9 +2374,11 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 # Always try to save, even if recorded_data is empty (might have stream info)
                 # Get recorded data count before saving
                 sample_count = len(self.lsl_recorder.recorded_data) if hasattr(self.lsl_recorder, 'recorded_data') and self.lsl_recorder.recorded_data else 0
+                logger.info(f"[Session] Saving {sample_count} LSL samples to {lsl_file}...")
                 
                 # Save LSL data only (no additional_tracking_data - everything is in LSL)
                 self.lsl_recorder.save_to_file(str(lsl_file), additional_tracking_data=None)
+                logger.debug(f"[Session] LSL data save completed")
                 
                 if sample_count > 0:
                     logger.info(f"Saved {sample_count} LSL samples to {lsl_file}")
@@ -2352,6 +2432,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
                 logger.error(f"Could not create empty LSL file: {e}", exc_info=True)
         
         # Update session metadata (tracking_data_path removed - always sessions/{session_id}/)
+        logger.info("[Session] Updating session metadata...")
         self.session.modified_date = datetime.now()
         
         # Save session metadata using project_manager for consistency
@@ -2359,6 +2440,7 @@ class EmbeddedWebpageSessionWindow(QMainWindow):
         from .project_manager import ProjectManager
         project_manager = ProjectManager()
         project_manager._save_session_metadata(self.project, self.session)
+        logger.info("[Session] Session metadata saved")
     
     def closeEvent(self, event):
         """Handle window close event."""
@@ -4320,6 +4402,79 @@ class MainWindow(QMainWindow):
         logger = logging.getLogger(__name__)
         
         if self.current_project.project_type == ProjectType.EMBEDDED_WEBPAGE:
+            # Check if Tobii eye tracker is enabled and prompt for calibration
+            lsl_config = None
+            if (self.current_project.embedded_webpage_config and 
+                self.current_project.embedded_webpage_config.lsl_config):
+                lsl_config = self.current_project.embedded_webpage_config.lsl_config
+            
+            tobii_enabled = lsl_config and lsl_config.enable_tobii_eyetracker
+            should_calibrate = False
+            
+            if tobii_enabled and TOBII_AVAILABLE:
+                # Prompt user to recalibrate
+                reply = QMessageBox.question(
+                    self,
+                    "Tobii Eye Tracker Calibration",
+                    "Tobii eye tracker is enabled for this session.\n\n"
+                    "Would you like to perform a calibration before starting the session?\n\n"
+                    "Calibration is recommended for accurate gaze tracking.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QMessageBox.StandardButton.Cancel:
+                    return  # User cancelled
+                
+                should_calibrate = (reply == QMessageBox.StandardButton.Yes)
+            
+            # Perform calibration if requested
+            if should_calibrate:
+                try:
+                    # Find eye tracker
+                    found_eyetrackers = tr.find_all_eyetrackers()
+                    if not found_eyetrackers:
+                        QMessageBox.warning(
+                            self,
+                            "No Eye Tracker",
+                            "No Tobii eye tracker found. Please ensure the device is connected.\n\n"
+                            "The session will continue without calibration."
+                        )
+                    else:
+                        eyetracker = found_eyetrackers[0]
+                        # Show calibration window (modal)
+                        calib_window = TobiiCalibrationWindow(eyetracker, self)
+                        calib_window.setWindowModality(Qt.WindowModality.ApplicationModal)
+                        calib_window.show()
+                        
+                        # Wait for calibration to complete using event loop
+                        calibration_success = [False]  # Use list to allow modification in nested function
+                        calib_completed = [False]
+                        
+                        def on_calibration_complete(success):
+                            calibration_success[0] = success
+                            calib_completed[0] = True
+                            calib_window.close()
+                        
+                        calib_window.calibration_complete.connect(on_calibration_complete)
+                        
+                        # Process events until calibration completes
+                        from PySide6.QtWidgets import QApplication
+                        while not calib_completed[0] and calib_window.isVisible():
+                            QApplication.processEvents()
+                            time.sleep(0.01)  # Small sleep to avoid busy loop
+                        
+                        if not calibration_success[0]:
+                            logger.info("Calibration was cancelled or failed")
+                except Exception as e:
+                    logger.error(f"Error during calibration: {e}", exc_info=True)
+                    QMessageBox.warning(
+                        self,
+                        "Calibration Error",
+                        f"An error occurred during calibration:\n{str(e)}\n\n"
+                        "The session will continue without calibration."
+                    )
+            
             # Show session creation dialog
             dialog = SessionCreationDialog(self.current_project, self)
             if dialog.exec() == QDialog.DialogCode.Accepted:

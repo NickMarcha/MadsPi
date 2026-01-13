@@ -41,6 +41,25 @@ except Exception as e:
     BRAINFLOW_UI_AVAILABLE = False
     BRAINFLOW_ERROR = str(e)
 
+# Optional Tobii eye tracker integration
+try:
+    from .tobii_eyetracker import TobiiEyetrackerStreamer
+    from .tobii_calibration_window import TobiiCalibrationWindow
+    from .tobii_gaze_test_window import TobiiGazeTestWindow
+    import tobii_research as tr
+    TOBII_UI_AVAILABLE = True
+    TOBII_ERROR = None
+except Exception as e:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Tobii eye tracker integration not available: {e}")
+    TobiiEyetrackerStreamer = None
+    TobiiCalibrationWindow = None
+    TobiiGazeTestWindow = None
+    tr = None
+    TOBII_UI_AVAILABLE = False
+    TOBII_ERROR = str(e)
+
 
 class StreamResolutionWorker(QThread):
     """Worker thread to resolve LSL streams without blocking UI."""
@@ -103,6 +122,7 @@ class LSLStreamManagerDialog(QDialog):
         self.available_streams = []
         self.emotibit_process = None
         self.brainflow_streamer = None  # BrainFlow streamer instance
+        self.tobii_streamer = None  # Tobii eye tracker streamer instance
         self.test_recorder: Optional[LSLRecorder] = None
         self.test_timer: Optional[QTimer] = None
         self.is_testing = False
@@ -194,11 +214,38 @@ class LSLStreamManagerDialog(QDialog):
         self.marker_api_check.stateChanged.connect(self._on_config_changed)
         config_layout.addRow("Enable Marker API:", self.marker_api_check)
         
-        # Tobii eyetracker
-        tobii_layout = QHBoxLayout()
+        # Tobii eyetracker - with start/stop/calibrate controls
+        tobii_group = QGroupBox("Tobii Eye Tracker")
+        tobii_group_layout = QVBoxLayout()
+        
+        tobii_enable_layout = QHBoxLayout()
         self.tobii_check = QCheckBox()
         self.tobii_check.setChecked(self.current_config.enable_tobii_eyetracker)
         self.tobii_check.stateChanged.connect(self._on_config_changed)
+        
+        def _on_tobii_check_changed(state):
+            """Handle Tobii checkbox state change."""
+            enabled = (state == Qt.CheckState.Checked) and TOBII_UI_AVAILABLE
+            self.start_tobii_button.setEnabled(enabled)
+            self.calibrate_tobii_button.setEnabled(enabled)
+            if hasattr(self, 'test_gaze_button'):
+                self.test_gaze_button.setEnabled(enabled)
+            if not TOBII_UI_AVAILABLE and state == Qt.CheckState.Checked:
+                self.start_tobii_button.setToolTip(
+                    f"Tobii not available: {TOBII_ERROR or 'Install tobii-research package'}"
+                )
+            else:
+                self.start_tobii_button.setToolTip("")
+        
+        self.tobii_check.stateChanged.connect(_on_tobii_check_changed)
+        tobii_enable_layout.addWidget(self.tobii_check)
+        tobii_enable_layout.addWidget(QLabel("Enable Tobii eye tracker streaming"))
+        tobii_enable_layout.addStretch()
+        tobii_group_layout.addLayout(tobii_enable_layout)
+        
+        # Stream name filter (optional)
+        stream_name_layout = QHBoxLayout()
+        stream_name_layout.addWidget(QLabel("Stream name filter (optional):"))
         self.tobii_stream_edit = QLineEdit()
         self.tobii_stream_edit.setPlaceholderText("Auto-detect (leave empty)")
         if self.current_config.tobii_stream_name:
@@ -208,10 +255,63 @@ class LSLStreamManagerDialog(QDialog):
         self.tobii_check.stateChanged.connect(
             lambda state: self.tobii_stream_edit.setEnabled(state == Qt.CheckState.Checked)
         )
-        tobii_layout.addWidget(self.tobii_check)
-        tobii_layout.addWidget(QLabel("Stream name:"))
-        tobii_layout.addWidget(self.tobii_stream_edit)
-        config_layout.addRow("Enable Tobii Eyetracker:", tobii_layout)
+        stream_name_layout.addWidget(self.tobii_stream_edit)
+        tobii_group_layout.addLayout(stream_name_layout)
+        
+        # Start/Stop/Calibrate buttons
+        tobii_buttons_layout = QHBoxLayout()
+        self.start_tobii_button = QPushButton("Start Tobii Stream")
+        self.start_tobii_button.clicked.connect(self._start_tobii_streamer)
+        initial_tobii_enabled = TOBII_UI_AVAILABLE and self.current_config.enable_tobii_eyetracker
+        self.start_tobii_button.setEnabled(initial_tobii_enabled)
+        
+        # If Tobii is not available, disable the checkbox too
+        if not TOBII_UI_AVAILABLE:
+            self.tobii_check.setEnabled(False)
+            self.tobii_check.setToolTip(f"Tobii not available: {TOBII_ERROR or 'Install tobii-research package'}")
+        
+        self.stop_tobii_button = QPushButton("Stop Tobii Stream")
+        self.stop_tobii_button.clicked.connect(self._stop_tobii_streamer)
+        self.stop_tobii_button.setEnabled(False)
+        
+        self.calibrate_tobii_button = QPushButton("Calibrate Eye Tracker")
+        self.calibrate_tobii_button.clicked.connect(self._calibrate_tobii)
+        self.calibrate_tobii_button.setEnabled(initial_tobii_enabled)
+        self.calibrate_tobii_button.setToolTip(
+            "Perform eye tracker calibration.\n"
+            "This opens a fullscreen calibration window.\n"
+            "You can calibrate before or after starting the stream."
+        )
+        
+        self.test_gaze_button = QPushButton("Test Gaze")
+        self.test_gaze_button.clicked.connect(self._test_gaze)
+        self.test_gaze_button.setEnabled(initial_tobii_enabled)
+        self.test_gaze_button.setToolTip(
+            "Test eye tracker gaze visualization.\n"
+            "Shows a black screen with your gaze point rendered.\n"
+            "Useful for verifying calibration quality."
+        )
+        
+        tobii_buttons_layout.addWidget(self.start_tobii_button)
+        tobii_buttons_layout.addWidget(self.stop_tobii_button)
+        tobii_buttons_layout.addWidget(self.calibrate_tobii_button)
+        tobii_buttons_layout.addWidget(self.test_gaze_button)
+        tobii_buttons_layout.addStretch()
+        tobii_group_layout.addLayout(tobii_buttons_layout)
+        
+        # Status label
+        if not TOBII_UI_AVAILABLE:
+            error_msg = TOBII_ERROR or "tobii-research not installed"
+            self.tobii_status_label = QLabel(f"Status: Tobii unavailable ({error_msg})")
+            self.tobii_status_label.setStyleSheet("color: red;")
+            self.tobii_status_label.setWordWrap(True)
+        else:
+            self.tobii_status_label = QLabel("Status: Not started")
+            self.tobii_status_label.setStyleSheet("color: gray;")
+        tobii_group_layout.addWidget(self.tobii_status_label)
+        
+        tobii_group.setLayout(tobii_group_layout)
+        config_layout.addRow(tobii_group)
 
         # EmotiBit (BrainFlow backend) - with start/stop controls
         emotibit_group = QGroupBox("EmotiBit (BrainFlow)")
@@ -448,6 +548,16 @@ class LSLStreamManagerDialog(QDialog):
                 self.brainflow_ip_edit.setText(self.current_config.brainflow_ip)
             else:
                 self.brainflow_ip_edit.clear()
+            
+            # Update Tobii button states
+            if hasattr(self, 'start_tobii_button'):
+                tobii_enabled = TOBII_UI_AVAILABLE and self.current_config.enable_tobii_eyetracker
+                self.start_tobii_button.setEnabled(tobii_enabled)
+                if hasattr(self, 'calibrate_tobii_button'):
+                    self.calibrate_tobii_button.setEnabled(tobii_enabled)
+                if hasattr(self, 'test_gaze_button'):
+                    self.test_gaze_button.setEnabled(tobii_enabled)
+            
             logger.debug("UI updated from config successfully")
         except Exception as e:
             logger.error(f"Error updating UI from config: {e}", exc_info=True)
@@ -1769,14 +1879,288 @@ class LSLStreamManagerDialog(QDialog):
         self._on_config_changed()
         return self.current_config
     
+    def _start_tobii_streamer(self):
+        """Start the Tobii eye tracker streamer."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not TOBII_UI_AVAILABLE or TobiiEyetrackerStreamer is None:
+            error_msg = TOBII_ERROR or "tobii-research package not installed"
+            detailed_msg = (
+                f"Tobii eye tracker integration is not available in this environment.\n\n"
+                f"Error: {error_msg}\n\n"
+                f"To enable Tobii support, please install the tobii-research package:\n"
+                f"  pip install tobii-research"
+            )
+            QMessageBox.warning(self, "Tobii Missing", detailed_msg)
+            return
+        
+        if self.tobii_streamer:
+            QMessageBox.information(self, "Info", "Tobii streamer already running.")
+            return
+        
+        try:
+            logger.info("Starting Tobii eye tracker streamer")
+            self.tobii_streamer = TobiiEyetrackerStreamer()
+            self.tobii_streamer.start()
+            
+            # Update UI immediately
+            self.start_tobii_button.setEnabled(False)
+            self.stop_tobii_button.setEnabled(True)
+            self.calibrate_tobii_button.setEnabled(True)
+            self.tobii_status_label.setText("Status: Starting... (searching for eye tracker)")
+            self.tobii_status_label.setStyleSheet("color: orange;")
+            
+            logger.info("Tobii streamer thread started")
+            
+            # Check status after a delay
+            QTimer.singleShot(2000, self._check_tobii_status)
+            QTimer.singleShot(5000, self._check_tobii_status)
+            
+            message = (
+                "Started Tobii eye tracker streamer.\n\n"
+                "The stream should appear in available streams once connected.\n\n"
+                "Note: You can calibrate the eye tracker using the 'Calibrate Eye Tracker' button."
+            )
+            QMessageBox.information(self, "Tobii", message)
+        except Exception as e:
+            logger.error(f"Failed to start Tobii streamer: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to start Tobii streamer: {e}")
+    
+    def _check_tobii_status(self):
+        """Check if Tobii streamer successfully connected and created LSL stream."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not self.tobii_streamer:
+            return
+        
+        # Check if streamer has an outlet (means it successfully connected)
+        if hasattr(self.tobii_streamer, '_outlet') and self.tobii_streamer._outlet:
+            if hasattr(self, 'tobii_status_label'):
+                self.tobii_status_label.setText("Status: Running (LSL stream active)")
+                self.tobii_status_label.setStyleSheet("color: green;")
+            logger.info("Tobii streamer confirmed active with LSL outlet")
+            # Refresh streams to show the new stream
+            if LSL_AVAILABLE:
+                QTimer.singleShot(500, self._refresh_streams)
+        else:
+            # Check if it's still trying to connect or if it failed
+            if hasattr(self.tobii_streamer, '_started') and self.tobii_streamer._started:
+                # Check if there was a connection error
+                if hasattr(self.tobii_streamer, '_connection_error') and self.tobii_streamer._connection_error:
+                    if hasattr(self, 'tobii_status_label'):
+                        error_msg = self.tobii_streamer._connection_error
+                        self.tobii_status_label.setText(f"Status: Connection failed - {error_msg}")
+                        self.tobii_status_label.setStyleSheet("color: red;")
+                    logger.warning("Tobii streamer started but connection failed")
+                else:
+                    if hasattr(self, 'tobii_status_label'):
+                        self.tobii_status_label.setText("Status: Connecting... (this may take a few seconds)")
+                        self.tobii_status_label.setStyleSheet("color: orange;")
+                    logger.debug("Tobii streamer still connecting...")
+    
+    def _stop_tobii_streamer(self):
+        """Stop the Tobii eye tracker streamer if running."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not self.tobii_streamer:
+            QMessageBox.information(self, "Info", "No Tobii streamer is running.")
+            return
+        
+        try:
+            logger.info("Stopping Tobii streamer")
+            self.tobii_streamer.stop()
+        except Exception as e:
+            logger.error(f"Error stopping Tobii streamer: {e}", exc_info=True)
+        finally:
+            self.tobii_streamer = None
+            
+            # Update UI
+            if hasattr(self, 'start_tobii_button'):
+                self.start_tobii_button.setEnabled(
+                    TOBII_UI_AVAILABLE and self.tobii_check.isChecked()
+                )
+            if hasattr(self, 'stop_tobii_button'):
+                self.stop_tobii_button.setEnabled(False)
+            if hasattr(self, 'calibrate_tobii_button'):
+                self.calibrate_tobii_button.setEnabled(
+                    TOBII_UI_AVAILABLE and self.tobii_check.isChecked()
+                )
+            if hasattr(self, 'tobii_status_label'):
+                self.tobii_status_label.setText("Status: Stopped")
+                self.tobii_status_label.setStyleSheet("color: gray;")
+            
+            logger.info("Tobii streamer stopped")
+            QMessageBox.information(self, "Tobii", "Stopped Tobii streamer.")
+    
+    def _calibrate_tobii(self):
+        """Open the Tobii calibration window."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not TOBII_UI_AVAILABLE or TobiiCalibrationWindow is None:
+            error_msg = TOBII_ERROR or "tobii-research package not installed"
+            QMessageBox.warning(
+                self,
+                "Tobii Not Available",
+                f"Tobii eye tracker integration is not available:\n\n{error_msg}\n\n"
+                f"Please install tobii-research package to enable calibration."
+            )
+            return
+        
+        try:
+            # Find eye tracker
+            logger.info("Searching for Tobii eye tracker for calibration...")
+            found_eyetrackers = tr.find_all_eyetrackers()
+            
+            if not found_eyetrackers:
+                QMessageBox.warning(
+                    self,
+                    "No Eye Tracker",
+                    "No Tobii eye tracker found.\n\n"
+                    "Please ensure:\n"
+                    "• The eye tracker is connected (USB or network)\n"
+                    "• The device is powered on\n"
+                    "• No other application is using the eye tracker"
+                )
+                return
+            
+            eyetracker = found_eyetrackers[0]
+            logger.info(f"Found eye tracker: {eyetracker.model} at {eyetracker.address}")
+            
+            # Show calibration window (modal)
+            calib_window = TobiiCalibrationWindow(eyetracker, self)
+            calib_window.setWindowModality(Qt.WindowModality.ApplicationModal)
+            
+            # Connect to completion signal
+            calibration_success = [False]
+            calib_completed = [False]
+            
+            def on_calibration_complete(success):
+                calibration_success[0] = success
+                calib_completed[0] = True
+                calib_window.close()
+            
+            calib_window.calibration_complete.connect(on_calibration_complete)
+            
+            # Show the window
+            calib_window.show()
+            
+            # Process events until calibration completes
+            from PySide6.QtWidgets import QApplication
+            import time
+            while not calib_completed[0] and calib_window.isVisible():
+                QApplication.processEvents()
+                time.sleep(0.01)
+            
+            if calibration_success[0]:
+                QMessageBox.information(
+                    self,
+                    "Calibration Complete",
+                    "Eye tracker calibration completed successfully!\n\n"
+                    "You can now start the Tobii streamer if it's not already running."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Calibration Cancelled",
+                    "Calibration was cancelled or failed.\n\n"
+                    "You can try again, or proceed without calibration.\n"
+                    "Note: The eye tracker will use default calibration if not calibrated."
+                )
+        
+        except Exception as e:
+            logger.error(f"Error during calibration: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Calibration Error",
+                f"An error occurred during calibration:\n\n{str(e)}\n\n"
+                "Please check:\n"
+                "• Eye tracker is connected and powered on\n"
+                "• No other application is using the eye tracker\n"
+                "• Device drivers are installed correctly"
+            )
+    
+    def _test_gaze(self):
+        """Open the Tobii gaze test window."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not TOBII_UI_AVAILABLE or TobiiGazeTestWindow is None:
+            error_msg = TOBII_ERROR or "tobii-research package not installed"
+            QMessageBox.warning(
+                self,
+                "Tobii Not Available",
+                f"Tobii eye tracker integration is not available:\n\n{error_msg}\n\n"
+                f"Please install tobii-research package to enable gaze testing."
+            )
+            return
+        
+        try:
+            # Find eye tracker
+            logger.info("Searching for Tobii eye tracker for gaze test...")
+            found_eyetrackers = tr.find_all_eyetrackers()
+            
+            if not found_eyetrackers:
+                QMessageBox.warning(
+                    self,
+                    "No Eye Tracker",
+                    "No Tobii eye tracker found.\n\n"
+                    "Please ensure:\n"
+                    "• The eye tracker is connected (USB or network)\n"
+                    "• The device is powered on\n"
+                    "• No other application is using the eye tracker"
+                )
+                return
+            
+            eyetracker = found_eyetrackers[0]
+            logger.info(f"Found eye tracker: {eyetracker.model} at {eyetracker.address}")
+            
+            # Show gaze test window (modal)
+            test_window = TobiiGazeTestWindow(eyetracker, self)
+            test_window.setWindowModality(Qt.WindowModality.ApplicationModal)
+            
+            # Connect to completion signal
+            test_completed = [False]
+            
+            def on_test_complete():
+                test_completed[0] = True
+                test_window.close()
+            
+            test_window.test_complete.connect(on_test_complete)
+            
+            # Show the window
+            test_window.show()
+            
+            # Process events until test completes
+            from PySide6.QtWidgets import QApplication
+            import time
+            while not test_completed[0] and test_window.isVisible():
+                QApplication.processEvents()
+                time.sleep(0.01)
+        
+        except Exception as e:
+            logger.error(f"Error during gaze test: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Gaze Test Error",
+                f"An error occurred during gaze test:\n\n{str(e)}\n\n"
+                "Please check:\n"
+                "• Eye tracker is connected and powered on\n"
+                "• No other application is using the eye tracker\n"
+                "• Device drivers are installed correctly"
+            )
+    
     def closeEvent(self, event):
         """Handle dialog close event."""
         if self.is_testing:
             self._stop_test()
         
-        # Note: We don't stop the BrainFlow streamer on close - it should persist
-        # for the recording session. User can stop it manually if needed.
-        # The streamer will be managed by the session window during recording.
+        # Note: We don't stop the BrainFlow or Tobii streamers on close - they should persist
+        # for the recording session. User can stop them manually if needed.
+        # The streamers will be managed by the session window during recording.
         
         event.accept()
 
