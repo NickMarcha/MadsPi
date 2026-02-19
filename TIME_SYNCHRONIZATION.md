@@ -18,7 +18,7 @@ This document analyzes the time synchronization implementation in MadsPipeline. 
 
 2. **Dual Timestamp Storage**: Both synchronized and original timestamps are preserved
    - `timestamp`: Synchronized to local time domain (for direct comparison)
-   - `original_timestamp`: Original device clock time (reconstructed for reference)
+   - `original_timestamp`: Raw device timestamp from `inlet.pull_sample()` (before sync; for reference)
    - Location: `src/madspipeline/lsl_integration.py:479-490`
 
 3. **Clock Offset Recording**: The application records `clock_offset` for each LSL sample via `inlet.time_correction()`
@@ -286,30 +286,7 @@ while True:
 
 ## Implementation Status
 
-### Phase 1: Immediate Fix (Enable Online Sync) ✅ COMPLETE
-
-**Status**: **IMPLEMENTED** on 2025-11-24
-
-1. **Modified `lsl_integration.py`** to enable clock synchronization:
-   - Updated `StreamInlet` creation (removed unsupported `postproc_flags`)
-   - Implemented manual clock offset correction: `synchronized_timestamp = timestamp + clock_offset`
-   - Location: `src/madspipeline/lsl_integration.py:286-291, 450-456`
-   - Note: pyLSL Python bindings don't support `postproc_flags`, so manual correction is used
-
-2. **Updated data structure** to preserve original timestamps:
-   - `timestamp`: Synchronized to local time domain
-   - `original_timestamp`: Reconstructed original device timestamp
-   - `synchronization_applied`: Flag indicating sync is active
-   - Location: `src/madspipeline/lsl_integration.py:479-490`
-
-3. **Updated synchronization metadata**:
-   - Enhanced JSON schema with sync method and field descriptions
-   - Location: `src/madspipeline/lsl_integration.py:635-642`
-
-**Testing Recommendations**:
-- Record EmotiBit + Bridge Events simultaneously
-- Verify timestamps align correctly (should be within < 1 ms)
-- Check that events from different devices can be compared directly using `timestamp` field
+For current implementation status and usage, see **README.md** (LSL Time Synchronization and Data Output Format) and **CURRENT_TIME_IMPLEMENTATION.md** (field semantics and playback).
 
 ### Phase 2: Post-Hoc Synchronization Module
 
@@ -427,28 +404,6 @@ Existing recordings have clock offsets recorded but not applied. You can:
 - **LSL Validation**: http://sccn.ucsd.edu/~mgrivich/LSL_Validation.html
 - **LSL C++ API**: https://github.com/sccn/liblsl/blob/main/include/lsl/inlet.h (postprocessing flags)
 - **pyLSL Documentation**: https://github.com/labstreaminglayer/liblsl-Python
-
----
-
-## Conclusion
-
-**Current Status**: Solution 1 (Online Clock Synchronization) has been **IMPLEMENTED** as of 2025-11-24.
-
-**What This Means**:
-- ✅ All LSL device timestamps are automatically synchronized to local time domain
-- ✅ Timestamps can be directly compared across devices (EmotiBit, Bridge Events, Mouse Tracking, etc.)
-- ✅ Original device timestamps preserved for reference
-- ✅ Real-time synchronization during recording (no post-processing required)
-- ✅ Accuracy: < 1 ms on local networks
-
-**Future Enhancements** (Optional):
-- **Solution 2**: Post-hoc linear fit synchronization for even higher accuracy in offline analysis
-- **Solution 4**: Raspberry Pi time reference if wall-clock alignment is needed
-
-**For Analysis Tools**:
-- Use the `timestamp` field for all timestamp comparisons (already synchronized)
-- The `original_timestamp` field is available for reference or validation
-- Clock offsets are still recorded for advanced post-hoc analysis if needed
 
 ---
 
